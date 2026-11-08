@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Les paires</title>
+<!--
+  Les paires - jeu de memoire pour la telecommande.
+  Deux manches de 3 paires (6 grandes cartes, grille 3x2). Les animaux sont dessines en SVG inline.
+  Au debut de chaque manche, les cartes se montrent un instant, puis se retournent.
+  Aucune penalite : deux cartes differentes se retournent simplement ; apres 3 essais rates,
+  une paire scintille pour aider. Les 6 animaux trouves remplissent la rangee du haut : c'est gagne.
+
+  Entrees acceptees :
+    - pointeur (le pave directionnel deplace un pointeur, OK = clic) : survol = choix, clic = retourner ;
+    - fleches (keydown) : deplacent le cadre blanc sur les cartes, OK/Entree retourne la carte.
+  Retour (ou la maison en haut a gauche) ramene a l'accueil. M ou le haut-parleur coupe le son.
+  Fichier autonome : pas de dependance, pas d'image, sons synthetises avec WebAudio.
+  Note : aucun caractere accentue dans les textes affiches (police de secours de la tele).
+-->
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+    background: #1d1240; color: #fff;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+    font-family: "Trebuchet MS", "Arial Rounded MT Bold", Verdana, Arial, sans-serif;
+  }
+  /* Scene logique 1920x1080, mise a l'echelle par fit() */
+  #stage {
+    position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden;
+    background: radial-gradient(ellipse at 50% 40%, #4b2a8a 0%, #2a1760 55%, #160c36 100%);
+  }
+  /* Le canvas (particules, etoiles volantes) est au-dessus des cartes et laisse passer les clics */
+  #cv { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; display: block; pointer-events: none; }
+
+  /* ---- Cartes : retournement 3D en CSS ---- */
+  .card { position: absolute; width: 340px; height: 340px; perspective: 1600px; cursor: pointer; }
+  .card .inner {
+    position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+    transform-style: preserve-3d; transition: transform 0.45s cubic-bezier(0.3, 1.4, 0.5, 1);
+  }
+  .card.up .inner { transform: rotateY(180deg); }
+  .face {
+    position: absolute; left: 0; top: 0; width: 100%; height: 100%; box-sizing: border-box;
+    border-radius: 44px; backface-visibility: hidden; -webkit-backface-visibility: hidden;
+    box-shadow: 0 14px 0 rgba(0, 0, 0, 0.25), 0 24px 40px rgba(0, 0, 0, 0.35);
+  }
+  .face svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+  .back { background: #ff7eb6; border: 12px solid #fff; }
+  .front { background: #fff8e7; border: 12px solid #ffe14d; transform: rotateY(180deg); }
+  .front svg { left: 8%; top: 8%; width: 84%; height: 84%; }
+
+  /* Cadre de selection (fleches ou pointeur) */
+  .card.sel { z-index: 2; }
+  .card.sel::after {
+    content: ""; position: absolute; left: -22px; top: -22px; right: -22px; bottom: -22px;
+    border: 12px solid #fff; border-radius: 62px; animation: selpulse 1s ease-in-out infinite;
+  }
+  @keyframes selpulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.7; transform: scale(1.03); } }
+
+  /* Paire trouvee : la carte saute et brille */
+  .card.found .front { border-color: #3ccf6e; box-shadow: 0 0 0 10px rgba(60, 207, 110, 0.45), 0 0 60px rgba(120, 255, 160, 0.8); }
+  .card.found { animation: jump 0.6s ease-out; }
+  @keyframes jump { 0% { transform: translateY(0); } 35% { transform: translateY(-60px) scale(1.08); } 70% { transform: translateY(6px); } 100% { transform: translateY(0); } }
+  /* Petite secousse quand on choisit une carte deja retournee */
+  .card.wiggle { animation: wiggle 0.4s ease-in-out; }
+  @keyframes wiggle { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-5deg); } 75% { transform: rotate(5deg); } }
+  /* Aide : une paire scintille */
+  .card.hint .back { animation: shimmer 0.7s ease-in-out infinite; }
+  @keyframes shimmer { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 225, 77, 0.9); } 50% { box-shadow: 0 0 0 26px rgba(255, 225, 77, 0.35), 0 0 80px #ffe14d; } }
+  /* Distribution : les cartes arrivent en grossissant */
+  .card.deal { animation: dealin 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) backwards; }
+  @keyframes dealin { 0% { transform: scale(0) rotate(-20deg); } 100% { transform: scale(1) rotate(0); } }
+  /* Fin de manche : les cartes dansent */
+  .card.dance { animation: dance 0.7s ease-in-out infinite; }
+  @keyframes dance { 0%, 100% { transform: translateY(0) rotate(0); } 25% { transform: translateY(-30px) rotate(-4deg); } 75% { transform: translateY(-30px) rotate(4deg); } }
+
+  /* ---- Objectif : 6 ronds en haut ---- */
+  .slot {
+    position: absolute; top: 38px; width: 124px; height: 124px; box-sizing: border-box; border-radius: 50%;
+    border: 7px dashed rgba(255, 255, 255, 0.35); background: rgba(255, 255, 255, 0.06);
+  }
+  .slot svg { position: absolute; left: 10%; top: 10%; width: 80%; height: 80%; }
+  .slot.got { border: 7px solid #ffe14d; background: #fff8e7; animation: pop 0.5s cubic-bezier(0.3, 1.6, 0.5, 1); }
+  @keyframes pop { 0% { transform: scale(0.3); } 100% { transform: scale(1); } }
+
+  /* ---- Ecrans (accueil, victoire) ---- */
+  .screen {
+    position: absolute; left: 0; top: 0; width: 1920px; height: 1080px;
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    box-sizing: border-box;
+  }
+  .screen.on { display: flex; }
+  #start { background: #2a1760; }
+  #win { background: rgba(20, 10, 50, 0.45); padding-bottom: 120px; }
+  h1 {
+    font-size: 130px; margin: 0 0 40px; color: #ffe14d; letter-spacing: 2px;
+    text-shadow: 0 8px 0 #7a2a8a, 0 0 40px rgba(255, 220, 80, 0.6);
+  }
+  .hint { display: flex; align-items: center; gap: 40px; margin-bottom: 60px; }
+  .mini { width: 210px; height: 210px; border-radius: 34px; background: #fff8e7; border: 10px solid #ffe14d; position: relative; box-sizing: border-box; }
+  .mini.back { background: #ff7eb6; border-color: #fff; }
+  .mini svg { position: absolute; left: 8%; top: 8%; width: 84%; height: 84%; }
+  .row { display: flex; align-items: center; gap: 70px; }
+
+  /* Gros boutons. Pas de <button> : aucune activation clavier native, on gere tout nous-memes. */
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 30px;
+    min-width: 520px; height: 200px; padding: 0 70px; box-sizing: border-box;
+    border-radius: 100px; background: #ff5a8a; color: #fff;
+    font-size: 100px; font-weight: bold; cursor: pointer;
+    box-shadow: 0 16px 0 #b8325d, 0 24px 40px rgba(0, 0, 0, 0.4);
+  }
+  .btn.green { background: #3ccf6e; box-shadow: 0 16px 0 #23894a, 0 24px 40px rgba(0, 0, 0, 0.4); }
+  .btn.blue { background: #4aa8ff; box-shadow: 0 16px 0 #2a6cb0, 0 24px 40px rgba(0, 0, 0, 0.4); min-width: 240px; padding: 0 50px; }
+  .btn.sel { outline: 14px solid #fff; outline-offset: 10px; animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { transform: scale(1.08); } 50% { transform: scale(1.16); } }
+
+  .corner {
+    position: absolute; top: 34px; width: 130px; height: 130px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.18); display: flex; align-items: center; justify-content: center;
+    cursor: pointer; z-index: 5;
+  }
+  #home { left: 28px; display: none; }
+  #home.on { display: flex; }
+  #mute { right: 28px; }
+  #mute .off { display: none; }
+  #mute.muted { background: rgba(255, 80, 80, 0.45); }
+  #mute.muted .on { display: none; }
+  #mute.muted .off { display: block; }
+
+  /* Bandeau "Super !" entre les manches */
+  #banner {
+    position: absolute; left: 0; top: 470px; width: 1920px; text-align: center; font-size: 180px; font-weight: bold;
+    color: #ffe14d; text-shadow: 0 10px 0 #7a2a8a, 0 0 50px rgba(255, 220, 80, 0.8);
+    display: none; pointer-events: none; z-index: 4;
+  }
+  #banner.on { display: block; animation: bannerin 0.6s cubic-bezier(0.3, 1.6, 0.5, 1); }
+  @keyframes bannerin { 0% { transform: scale(0.2); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+
+  /* "BRAVO !" qui sautille lettre par lettre */
+  .bravo { font-size: 200px; }
+  .bravo span { display: inline-block; animation: hop 0.9s ease-in-out infinite; }
+  .bravo span:nth-child(2) { animation-delay: 0.1s; }
+  .bravo span:nth-child(3) { animation-delay: 0.2s; }
+  .bravo span:nth-child(4) { animation-delay: 0.3s; }
+  .bravo span:nth-child(5) { animation-delay: 0.4s; }
+  .bravo span:nth-child(7) { animation-delay: 0.5s; }
+  @keyframes hop { 0%, 100% { transform: translateY(0); } 40% { transform: translateY(-50px) rotate(-6deg); } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="slots"></div>
+  <div id="grid"></div>
+  <div id="banner">Super !</div>
+  <canvas id="cv" width="1920" height="1080"></canvas>
+
+  <!-- Accueil : titre, exemple (une carte cachee, deux chats), JOUER -->
+  <div id="start" class="screen on">
+    <h1>Trouve les paires !</h1>
+    <div class="hint" id="startHint"></div>
+    <div class="btn" data-action="play">
+      <svg width="100" height="100" viewBox="0 0 100 100"><path d="M25 12 L88 50 L25 88 Z" fill="#fff"/></svg>
+      JOUER
+    </div>
+  </div>
+
+  <!-- Victoire : REJOUER (preselectionne) et la maison -->
+  <div id="win" class="screen">
+    <h1 class="bravo"><span>B</span><span>R</span><span>A</span><span>V</span><span>O</span> <span>!</span></h1>
+    <div class="row">
+      <div class="btn green" data-action="again">
+        <svg width="110" height="110" viewBox="0 0 100 100"><path d="M50 16 A34 34 0 1 1 16 50" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round"/><path d="M0 54 L32 54 L16 28 Z" fill="#fff"/></svg>
+        REJOUER
+      </div>
+      <div class="btn blue" data-action="home">
+        <svg width="120" height="120" viewBox="0 0 100 100"><path d="M50 10 L94 50 L80 50 L80 90 L60 90 L60 66 L40 66 L40 90 L20 90 L20 50 L6 50 Z" fill="#fff"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Coins : maison (pendant le jeu) et son -->
+  <div id="home" class="corner">
+    <svg width="80" height="80" viewBox="0 0 100 100"><path d="M50 10 L94 50 L80 50 L80 90 L60 90 L60 66 L40 66 L40 90 L20 90 L20 50 L6 50 Z" fill="#fff"/></svg>
+  </div>
+  <div id="mute" class="corner">
+    <svg class="on" width="84" height="84" viewBox="0 0 100 100"><path d="M8 36 L28 36 L52 14 L52 86 L28 64 L8 64 Z" fill="#fff"/><path d="M64 34 Q74 50 64 66 M74 22 Q92 50 74 78" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round"/></svg>
+    <svg class="off" width="84" height="84" viewBox="0 0 100 100"><path d="M8 36 L28 36 L52 14 L52 86 L28 64 L8 64 Z" fill="#fff"/><path d="M64 36 L92 64 M92 36 L64 64" stroke="#fff" stroke-width="10" stroke-linecap="round"/></svg>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ================================================================
+     Constantes du jeu
+     ================================================================ */
+  var W = 1920, H = 1080;
+  var STEP = 1 / 60;                       // pas fixe de la simulation
+  var ROUNDS = 2, PAIRS = 3, CARDS = 6, COLS = 3;
+  var CARD = 340, GAP = 56, GRID_TOP = 250;
+  var PREVIEW = 2.4;                       // duree ou les cartes se montrent au debut d'une manche
+  var MATCH_T = 0.55, MISS_T = 1.4;        // attente avant de valider / retourner une paire
+  var HINT_AFTER = 3;                      // essais rates avant qu'une paire scintille
+  var GOAL = ROUNDS * PAIRS;
+  var CONF_COLS = ['#ffd93b', '#ff7eb6', '#5ee0ff', '#8dff6a', '#ffa94d', '#b18cff', '#ffffff'];
+
+  /* ================================================================
+     Outils
+     ================================================================ */
+  function $(id) { return document.getElementById(id); }
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function randInt(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+  function now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
+  function cardLeft(i) { return W / 2 + ((i % COLS) - 1) * (CARD + GAP) - CARD / 2; }
+  function cardTop(i) { return GRID_TOP + Math.floor(i / COLS) * (CARD + GAP); }
+  // Les 6 ronds de l'objectif, en deux groupes de 3 (une manche chacun)
+  function slotCX(i) { return W / 2 + (i - (GOAL - 1) / 2) * 150 + (i < PAIRS ? -30 : 30); }
+  var SLOT_CY = 100;
+  // Relance une animation CSS (retirer la classe, forcer le recalcul, la remettre)
+  function restartAnim(el, cls, delay) {
+    el.style.animationDelay = (delay || 0) + 's';
+    el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls);
+  }
+
+  /* ================================================================
+     Mise a l'echelle : la scene 1920x1080 tient dans la fenetre (bandes si besoin)
+     ================================================================ */
+  var stage = $('stage'), cv = $('cv');
+  var ctx = cv.getContext('2d');
+  var scale = 1, offX = 0, offY = 0;
+  function fit() {
+    var iw = window.innerWidth || W, ih = window.innerHeight || H;
+    scale = Math.min(iw / W, ih / H);
+    offX = (iw - W * scale) / 2;
+    offY = (ih - H * scale) / 2;
+    stage.style.transform = 'translate(' + offX + 'px,' + offY + 'px) scale(' + scale + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+
+  /* ================================================================
+     Son (WebAudio) : cree au premier geste, coupe avec le bouton / la touche M
+     ================================================================ */
+  var AC = null, master = null, muted = false;
+  try { muted = window.localStorage.getItem('paires-muet') === '1'; } catch (e) { /* stockage indisponible */ }
+
+  function initAudio() {
+    if (AC) {
+      if (AC.state === 'suspended' && !document.hidden) { try { AC.resume(); } catch (e) { /* rien */ } }
+      return;
+    }
+    try {
+      var C = window.AudioContext || window.webkitAudioContext;
+      if (!C) return;
+      AC = new C();
+      master = AC.createGain();
+      master.gain.value = muted ? 0 : 0.5;
+      master.connect(AC.destination);
+    } catch (e) { AC = null; }
+  }
+  // Une note avec enveloppe ; slideTo fait glisser la hauteur.
+  function tone(freq, dur, type, vol, delay, slideTo) {
+    if (!AC || muted || AC.state !== 'running') return;
+    try {
+      var t = AC.currentTime + (delay || 0);
+      var o = AC.createOscillator(), g = AC.createGain();
+      o.type = type || 'sine';
+      o.frequency.setValueAtTime(freq, t);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol || 0.2, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(master);
+      o.start(t); o.stop(t + dur + 0.05);
+    } catch (e) { /* son indisponible : on continue sans */ }
+  }
+  function sfxSelect() { tone(880, 0.06, 'sine', 0.12); }
+  function sfxConfirm() { tone(660, 0.1, 'triangle', 0.25); tone(990, 0.18, 'triangle', 0.25, 0.09); }
+  function sfxFlip() { tone(700, 0.08, 'sine', 0.12, 0, 1300); }
+  function sfxNope() { tone(500, 0.08, 'sine', 0.08, 0, 420); }
+  // "Oh oh" tres doux : on rate, mais ce n'est pas grave
+  function sfxMiss() { tone(392, 0.2, 'sine', 0.14); tone(330, 0.28, 'sine', 0.14, 0.18); }
+  function sfxMatch() {
+    tone(784, 0.18, 'triangle', 0.25); tone(988, 0.18, 'triangle', 0.25, 0.09);
+    tone(1175, 0.18, 'triangle', 0.25, 0.18); tone(1568, 0.35, 'triangle', 0.2, 0.27);
+  }
+  function sfxSlot() { tone(1600, 0.1, 'sine', 0.1, 0, 2400); }
+  function sfxShow() { for (var i = 0; i < 6; i++) tone(900 + i * 140, 0.12, 'sine', 0.08, i * 0.05); }
+  function sfxWin() {
+    var seq = [523.25, 659.25, 783.99, 1046.5, 783.99, 1046.5];
+    for (var i = 0; i < seq.length; i++) tone(seq[i], 0.3, 'triangle', 0.28, i * 0.13);
+    tone(1318.51, 0.7, 'triangle', 0.25, 0.8);
+    tone(659.25, 0.7, 'sine', 0.15, 0.8);
+  }
+
+  var muteBtn = $('mute');
+  function paintMute() { muteBtn.classList.toggle('muted', muted); }
+  function toggleMute() {
+    muted = !muted;
+    if (master) master.gain.value = muted ? 0 : 0.5;
+    try { window.localStorage.setItem('paires-muet', muted ? '1' : '0'); } catch (e) { /* rien */ }
+    paintMute();
+    if (!muted) sfxSelect();
+  }
+  paintMute();
+
+  /* ================================================================
+     Les animaux : dessins SVG (viewBox 200x200) et petit cri synthetise
+     ================================================================ */
+  var INK = '#2b2340';
+  // Deux yeux ronds avec un reflet blanc
+  function eyes(xl, xr, y, r) {
+    r = r || 11;
+    return '<circle cx="' + xl + '" cy="' + y + '" r="' + r + '" fill="' + INK + '"/>' +
+           '<circle cx="' + xr + '" cy="' + y + '" r="' + r + '" fill="' + INK + '"/>' +
+           '<circle cx="' + (xl + 3) + '" cy="' + (y - 4) + '" r="' + (r * 0.35) + '" fill="#fff"/>' +
+           '<circle cx="' + (xr + 3) + '" cy="' + (y - 4) + '" r="' + (r * 0.35) + '" fill="#fff"/>';
+  }
+  function cheeks(xl, xr, y) {
+    return '<ellipse cx="' + xl + '" cy="' + y + '" rx="13" ry="8" fill="#ff7eb6" opacity="0.6"/>' +
+           '<ellipse cx="' + xr + '" cy="' + y + '" rx="13" ry="8" fill="#ff7eb6" opacity="0.6"/>';
+  }
+  function svg(body) { return '<svg viewBox="0 0 200 200">' + body + '</svg>'; }
+
+  var ANIMALS = [
+    { // chat
+      svg: svg('<path d="M46 86 L50 26 L92 60 Z M154 86 L150 26 L108 60 Z" fill="#ffa94d"/>' +
+        '<path d="M56 72 L58 42 L80 60 Z M144 72 L142 42 L120 60 Z" fill="#ff7eb6"/>' +
+        '<circle cx="100" cy="112" r="64" fill="#ffa94d"/>' +
+        '<path d="M86 52 Q100 66 114 52" stroke="#e07a1f" stroke-width="7" fill="none" stroke-linecap="round"/>' +
+        eyes(76, 124, 104, 12) + cheeks(62, 138, 132) +
+        '<path d="M91 124 L109 124 L100 134 Z" fill="#ff5a8a"/>' +
+        '<path d="M100 134 Q92 146 83 140 M100 134 Q108 146 117 140" stroke="' + INK + '" stroke-width="4" fill="none" stroke-linecap="round"/>' +
+        '<path d="M66 128 L24 120 M66 138 L26 144 M134 128 L176 120 M134 138 L174 144" stroke="' + INK + '" stroke-width="3" stroke-linecap="round"/>'),
+      cry: function () { tone(620, 0.25, 'triangle', 0.2, 0, 1000); tone(1000, 0.4, 'triangle', 0.2, 0.22, 540); }
+    },
+    { // chien
+      svg: svg('<ellipse cx="46" cy="104" rx="24" ry="50" fill="#7a4a26" transform="rotate(18 46 104)"/>' +
+        '<ellipse cx="154" cy="104" rx="24" ry="50" fill="#7a4a26" transform="rotate(-18 154 104)"/>' +
+        '<circle cx="100" cy="100" r="60" fill="#c98a4b"/>' +
+        '<ellipse cx="76" cy="92" rx="20" ry="18" fill="#a86c35"/>' +
+        '<ellipse cx="100" cy="134" rx="38" ry="28" fill="#f1d3a8"/>' +
+        eyes(76, 124, 92, 11) +
+        '<path d="M92 146 Q100 172 108 146 Z" fill="#ff7eb6"/>' +
+        '<ellipse cx="100" cy="122" rx="14" ry="10" fill="' + INK + '"/>' +
+        '<path d="M100 130 L100 141 M86 139 Q100 150 114 139" stroke="' + INK + '" stroke-width="4" fill="none" stroke-linecap="round"/>'),
+      cry: function () { tone(330, 0.1, 'square', 0.1, 0, 220); tone(350, 0.1, 'square', 0.1, 0.17, 230); }
+    },
+    { // grenouille
+      svg: svg('<circle cx="64" cy="64" r="28" fill="#5fcf5a"/><circle cx="136" cy="64" r="28" fill="#5fcf5a"/>' +
+        '<ellipse cx="100" cy="122" rx="80" ry="58" fill="#5fcf5a"/>' +
+        '<circle cx="64" cy="62" r="18" fill="#fff"/><circle cx="136" cy="62" r="18" fill="#fff"/>' +
+        eyes(66, 138, 64, 9) + cheeks(44, 156, 128) +
+        '<path d="M54 126 Q100 172 146 126" stroke="#2c7a2c" stroke-width="8" fill="none" stroke-linecap="round"/>' +
+        '<circle cx="90" cy="104" r="3" fill="#2c7a2c"/><circle cx="110" cy="104" r="3" fill="#2c7a2c"/>'),
+      cry: function () { tone(150, 0.13, 'sawtooth', 0.1, 0, 110); tone(160, 0.18, 'sawtooth', 0.1, 0.17, 100); }
+    },
+    { // cochon
+      svg: svg('<path d="M48 76 L42 30 L86 54 Z M152 76 L158 30 L114 54 Z" fill="#ff8fb0"/>' +
+        '<circle cx="100" cy="110" r="64" fill="#ffb3c8"/>' +
+        eyes(74, 126, 94, 11) + cheeks(56, 144, 124) +
+        '<ellipse cx="100" cy="130" rx="30" ry="21" fill="#ff8fb0"/>' +
+        '<ellipse cx="90" cy="130" rx="6" ry="9" fill="#c2557a"/><ellipse cx="110" cy="130" rx="6" ry="9" fill="#c2557a"/>' +
+        '<path d="M84 160 Q100 170 116 160" stroke="' + INK + '" stroke-width="4" fill="none" stroke-linecap="round"/>'),
+      cry: function () { tone(230, 0.16, 'sawtooth', 0.09, 0, 160); tone(210, 0.16, 'sawtooth', 0.09, 0.2, 150); }
+    },
+    { // poussin
+      svg: svg('<path d="M92 54 Q92 28 102 48 Q110 26 112 54" stroke="#f5c400" stroke-width="8" fill="none" stroke-linecap="round"/>' +
+        '<circle cx="100" cy="112" r="64" fill="#ffd93b"/>' +
+        '<ellipse cx="160" cy="124" rx="16" ry="28" fill="#f5c400" transform="rotate(-20 160 124)"/>' +
+        '<ellipse cx="40" cy="124" rx="16" ry="28" fill="#f5c400" transform="rotate(20 40 124)"/>' +
+        eyes(78, 122, 98, 11) + cheeks(64, 136, 124) +
+        '<path d="M86 112 L114 112 L100 130 Z" fill="#ff8c1a"/>' +
+        '<path d="M80 174 L80 190 M72 190 L88 190 M120 174 L120 190 M112 190 L128 190" stroke="#ff8c1a" stroke-width="6" stroke-linecap="round"/>'),
+      cry: function () { for (var i = 0; i < 3; i++) tone(2100, 0.07, 'sine', 0.13, i * 0.11, 2900); }
+    },
+    { // ours
+      svg: svg('<circle cx="50" cy="58" r="26" fill="#9b6b43"/><circle cx="150" cy="58" r="26" fill="#9b6b43"/>' +
+        '<circle cx="50" cy="58" r="13" fill="#e8b98a"/><circle cx="150" cy="58" r="13" fill="#e8b98a"/>' +
+        '<circle cx="100" cy="112" r="66" fill="#9b6b43"/>' +
+        '<ellipse cx="100" cy="138" rx="34" ry="26" fill="#e8b98a"/>' +
+        eyes(74, 126, 104, 11) +
+        '<ellipse cx="100" cy="126" rx="13" ry="9" fill="' + INK + '"/>' +
+        '<path d="M100 134 L100 144 M88 146 Q100 156 112 146" stroke="' + INK + '" stroke-width="4" fill="none" stroke-linecap="round"/>'),
+      cry: function () { tone(130, 0.4, 'triangle', 0.3, 0, 95); tone(120, 0.35, 'sawtooth', 0.05, 0, 90); }
+    },
+    { // lapin
+      svg: svg('<ellipse cx="74" cy="52" rx="18" ry="46" fill="#cfd3ea"/><ellipse cx="126" cy="52" rx="18" ry="46" fill="#cfd3ea"/>' +
+        '<ellipse cx="74" cy="56" rx="8" ry="32" fill="#ffb3c8"/><ellipse cx="126" cy="56" rx="8" ry="32" fill="#ffb3c8"/>' +
+        '<circle cx="100" cy="126" r="58" fill="#cfd3ea"/>' +
+        eyes(78, 122, 116, 11) + cheeks(62, 138, 144) +
+        '<path d="M93 136 L107 136 L100 143 Z" fill="#ff7eb6"/>' +
+        '<rect x="92" y="150" width="16" height="14" rx="3" fill="#fff" stroke="' + INK + '" stroke-width="2"/>' +
+        '<path d="M100 143 L100 150 M86 150 Q100 154 114 150" stroke="' + INK + '" stroke-width="3" fill="none" stroke-linecap="round"/>'),
+      cry: function () { tone(280, 0.3, 'sine', 0.25, 0, 900); }
+    },
+    { // poisson
+      svg: svg('<path d="M148 100 L192 62 L192 138 Z" fill="#2a6cb0"/>' +
+        '<path d="M78 58 Q108 24 132 62 Z" fill="#2a6cb0"/>' +
+        '<ellipse cx="96" cy="102" rx="68" ry="50" fill="#4aa8ff"/>' +
+        '<path d="M110 62 Q124 102 110 142 M130 70 Q142 102 130 134" stroke="#7cc2ff" stroke-width="7" fill="none"/>' +
+        '<circle cx="62" cy="90" r="16" fill="#fff"/>' + eyes(64, 64, 92, 8) +
+        '<path d="M42 118 Q56 130 70 118" stroke="' + INK + '" stroke-width="5" fill="none" stroke-linecap="round"/>' +
+        '<circle cx="28" cy="46" r="9" fill="none" stroke="#7cc2ff" stroke-width="4"/><circle cx="44" cy="22" r="6" fill="none" stroke="#7cc2ff" stroke-width="4"/>'),
+      cry: function () { tone(500, 0.08, 'sine', 0.2, 0, 1200); tone(600, 0.08, 'sine', 0.2, 0.12, 1400); }
+    }
+  ];
+
+  // Dos de carte : une grosse etoile souriante sur fond rose a pois
+  var BACK_SVG = '<svg viewBox="0 0 200 200">' +
+    '<circle cx="30" cy="30" r="8" fill="#ffd1e6"/><circle cx="170" cy="30" r="8" fill="#ffd1e6"/>' +
+    '<circle cx="30" cy="170" r="8" fill="#ffd1e6"/><circle cx="170" cy="170" r="8" fill="#ffd1e6"/>' +
+    '<path d="M100 28 L119 77 L171 79 L130 111 L145 162 L100 133 L55 162 L70 111 L29 79 L81 77 Z" fill="#ffe14d" stroke="#fff" stroke-width="7" stroke-linejoin="round"/>' +
+    '<circle cx="88" cy="100" r="6" fill="' + INK + '"/><circle cx="112" cy="100" r="6" fill="' + INK + '"/>' +
+    '<path d="M88 116 Q100 128 112 116" stroke="' + INK + '" stroke-width="5" fill="none" stroke-linecap="round"/></svg>';
+
+  // Exemple sur l'accueil : deux cartes cachees -> deux chats identiques
+  $('startHint').innerHTML =
+    '<div class="mini back">' + BACK_SVG + '</div>' +
+    '<div class="mini back">' + BACK_SVG + '</div>' +
+    '<svg width="130" height="110" viewBox="0 0 130 100"><path d="M10 50 L100 50 M70 18 L110 50 L70 82" stroke="#ffe14d" stroke-width="16" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+    '<div class="mini">' + ANIMALS[0].svg + '</div>' +
+    '<div class="mini">' + ANIMALS[0].svg + '</div>';
+
+  /* ================================================================
+     Construction des cartes et des ronds (une seule fois)
+     ================================================================ */
+  var grid = $('grid'), slotsEl = $('slots');
+  var cardEls = [], frontEls = [], slotEls = [];
+  (function build() {
+    var i;
+    for (i = 0; i < CARDS; i++) {
+      var c = document.createElement('div');
+      c.className = 'card';
+      c.style.left = cardLeft(i) + 'px';
+      c.style.top = cardTop(i) + 'px';
+      c.innerHTML = '<div class="inner"><div class="face back">' + BACK_SVG + '</div><div class="face front"></div></div>';
+      grid.appendChild(c);
+      cardEls.push(c);
+      frontEls.push(c.querySelector('.front'));
+      bindCard(c, i);
+    }
+    for (i = 0; i < GOAL; i++) {
+      var s = document.createElement('div');
+      s.className = 'slot';
+      s.style.left = (slotCX(i) - 62) + 'px';
+      slotsEl.appendChild(s);
+      slotEls.push(s);
+    }
+  })();
+
+  /* ================================================================
+     Particules (pool en anneau) et etoiles volantes vers les ronds
+     ================================================================ */
+  var PMAX = 400, parts = [], pNext = 0, liveParts = 0;
+  for (var i2 = 0; i2 < PMAX; i2++) parts.push({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, col: '#fff', size: 10, kind: 0, rot: 0, vr: 0, g: 0 });
+  function emit(x, y, vx, vy, life, col, size, kind, grav) {
+    var p = parts[pNext]; pNext = (pNext + 1) % PMAX;
+    p.on = true; p.x = x; p.y = y; p.vx = vx; p.vy = vy; p.life = life; p.max = life;
+    p.col = col; p.size = size; p.kind = kind; p.g = grav;
+    p.rot = Math.random() * 6.28; p.vr = (Math.random() - 0.5) * 10;
+  }
+  function burst(x, y, n) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2, sp = 200 + Math.random() * 500;
+      emit(x, y, Math.cos(a) * sp, Math.sin(a) * sp - 200, 0.6 + Math.random() * 0.4,
+        CONF_COLS[i % CONF_COLS.length], 8 + Math.random() * 12, 0, 900);
+    }
+  }
+  function confetti(n) {
+    for (var i = 0; i < n; i++) {
+      emit(Math.random() * W, -20 - Math.random() * 200, (Math.random() - 0.5) * 200, 150 + Math.random() * 250,
+        4 + Math.random() * 2, CONF_COLS[randInt(0, CONF_COLS.length - 1)], 16 + Math.random() * 14, 1, 120);
+    }
+  }
+
+  var FLY_MAX = 4, flyers = [];
+  for (var i3 = 0; i3 < FLY_MAX; i3++) flyers.push({ on: false, t: 0, dur: 0.75, x0: 0, y0: 0, slot: 0, animal: 0 });
+  function launchFlyer(x, y, slot, animal) {
+    for (var i = 0; i < FLY_MAX; i++) {
+      var f = flyers[i];
+      if (f.on) continue;
+      f.on = true; f.t = 0; f.x0 = x; f.y0 = y; f.slot = slot; f.animal = animal;
+      return;
+    }
+    fillSlot(slot, animal);   // pool plein (ne devrait pas arriver) : on remplit tout de suite
+  }
+  function fillSlot(slot, animal) {
+    slotEls[slot].innerHTML = ANIMALS[animal].svg;
+    restartAnim(slotEls[slot], 'got');
+    sfxSlot();
+    burst(slotCX(slot), SLOT_CY, 18);
+  }
+
+  /* ================================================================
+     Etat du jeu
+     ================================================================ */
+  var state = 'start';          // 'start' | 'play' | 'celebrate' | 'win'
+  var phase = '';               // pendant 'play' : 'deal' | 'preview' | 'pick' | 'check' | 'roundEnd' | 'clear'
+  var phaseT = 0, celebT = 0, confT = 0, T = 0, celebFired = false;
+  var round = 0, foundInRound = 0;
+  var deck = new Int8Array(CARDS);       // animal de chaque carte
+  var cs = new Uint8Array(CARDS);        // 0 cachee, 1 visible, 2 trouvee
+  var used = new Uint8Array(ANIMALS.length);
+  var first = -1, second = -1, isMatch = false, missStreak = 0, hintT = 0;
+  var sel = 1;                           // carte sous le cadre blanc
+  var actLock = 0;                       // evite une double activation (OK + clic, appui a l'apparition)
+  var lastOkKey = 0;                     // un clic juste apres Entree est le meme appui : ignore
+
+  function setUp(i, up) { cardEls[i].classList.toggle('up', up); }
+  function setAllUp(up) { for (var i = 0; i < CARDS; i++) if (cs[i] !== 2) setUp(i, up); }
+  function clearClass(cls) { for (var i = 0; i < CARDS; i++) cardEls[i].classList.remove(cls); }
+  function paintCardSel() {
+    for (var i = 0; i < CARDS; i++) cardEls[i].classList.toggle('sel', state === 'play' && i === sel);
+  }
+
+  // Nouvelle manche : 3 animaux encore jamais vus pendant cette partie, melanges
+  function startRound() {
+    var i, k = 0;
+    while (k < PAIRS) {
+      var a = randInt(0, ANIMALS.length - 1);
+      if (used[a]) continue;
+      used[a] = 1; deck[2 * k] = a; deck[2 * k + 1] = a; k++;
+    }
+    for (i = CARDS - 1; i > 0; i--) { var j = randInt(0, i), t = deck[i]; deck[i] = deck[j]; deck[j] = t; }
+    for (i = 0; i < CARDS; i++) {
+      cs[i] = 0;
+      frontEls[i].innerHTML = ANIMALS[deck[i]].svg;
+      cardEls[i].className = 'card';
+      restartAnim(cardEls[i], 'deal', i * 0.08);
+    }
+    first = -1; second = -1; foundInRound = 0; missStreak = 0; hintT = 0;
+    phase = 'deal'; phaseT = 1.0;
+    paintCardSel();
+  }
+
+  function startGame() {
+    var i;
+    for (i = 0; i < ANIMALS.length; i++) used[i] = 0;
+    for (i = 0; i < GOAL; i++) { slotEls[i].className = 'slot'; slotEls[i].innerHTML = ''; }
+    for (i = 0; i < FLY_MAX; i++) flyers[i].on = false;
+    $('banner').classList.remove('on');
+    round = 0; sel = 1;
+    state = 'play';
+    showScreen(null);
+    startRound();
+  }
+  function goHome() {
+    state = 'start';
+    phase = '';
+    $('banner').classList.remove('on');
+    for (var i = 0; i < CARDS; i++) cardEls[i].className = 'card';
+    showScreen('start');
+    actLock = now() + 400;
+  }
+  function showWin() {
+    state = 'win';
+    showScreen('win');
+    actLock = now() + 900;   // un enfant qui tape sur OK ne relance pas la partie par erreur
+  }
+
+  // L'enfant choisit une carte
+  function pick(i) {
+    if (state !== 'play') return;
+    if (phase === 'check' && !isMatch) { phaseT = 0; resolvePair(); }   // pas besoin d'attendre : on retourne tout de suite
+    // Pendant l'apercu, un appui (apres 1 s) lance la partie sans retourner de carte
+    if (phase === 'preview' && phaseT < PREVIEW - 1) { phaseT = 0; phaseDone(); return; }
+    if (phase !== 'pick') return;
+    if (cs[i] !== 0) { restartAnim(cardEls[i], 'wiggle'); sfxNope(); return; }   // deja visible : petite secousse
+    cs[i] = 1; setUp(i, true);
+    sfxFlip();
+    ANIMALS[deck[i]].cry();
+    clearClass('hint'); hintT = 0;
+    if (first < 0) { first = i; return; }
+    second = i;
+    isMatch = deck[first] === deck[second];
+    phase = 'check';
+    phaseT = isMatch ? MATCH_T : MISS_T;
+  }
+
+  // Deux cartes sont visibles : paire trouvee ou on les retourne
+  function resolvePair() {
+    var a = first, b = second;
+    first = -1; second = -1;
+    phase = 'pick';
+    if (isMatch) {
+      cs[a] = 2; cs[b] = 2;
+      restartAnim(cardEls[a], 'found'); restartAnim(cardEls[b], 'found');
+      sfxMatch();
+      missStreak = 0;
+      var slot = round * PAIRS + foundInRound;
+      foundInRound++;
+      var ax = cardLeft(a) + CARD / 2, ay = cardTop(a) + CARD / 2;
+      var bx = cardLeft(b) + CARD / 2, by = cardTop(b) + CARD / 2;
+      burst(ax, ay, 30); burst(bx, by, 30);
+      launchFlyer((ax + bx) / 2, (ay + by) / 2, slot, deck[a]);
+      if (foundInRound >= PAIRS) {
+        if (round + 1 >= ROUNDS) {
+          state = 'celebrate'; celebT = 3.2; celebFired = false;
+          paintCardSel();
+        } else {
+          phase = 'roundEnd'; phaseT = 2.0;
+          $('banner').classList.add('on');
+        }
+        for (var i = 0; i < CARDS; i++) restartAnim(cardEls[i], 'dance', 0.6 + i * 0.1);
+      }
+    } else {
+      cs[a] = 0; cs[b] = 0;
+      setUp(a, false); setUp(b, false);
+      sfxMiss();
+      missStreak++;
+      if (missStreak >= HINT_AFTER) showHint();
+    }
+  }
+
+  // Aide : la premiere paire encore cachee scintille un moment
+  function showHint() {
+    for (var i = 0; i < CARDS; i++) {
+      if (cs[i] !== 0) continue;
+      for (var j = i + 1; j < CARDS; j++) {
+        if (cs[j] === 0 && deck[j] === deck[i]) {
+          cardEls[i].classList.add('hint'); cardEls[j].classList.add('hint');
+          hintT = 3.0; missStreak = 0;
+          return;
+        }
+      }
+    }
+  }
+
+  // Fin d'un minuteur de phase
+  function phaseDone() {
+    if (phase === 'deal') {
+      clearClass('deal');
+      setAllUp(true); sfxShow();
+      phase = 'preview'; phaseT = PREVIEW;
+    } else if (phase === 'preview') {
+      setAllUp(false); sfxFlip();
+      phase = 'pick';
+    } else if (phase === 'check') {
+      resolvePair();
+    } else if (phase === 'roundEnd') {
+      $('banner').classList.remove('on');
+      for (var i = 0; i < CARDS; i++) { cs[i] = 0; cardEls[i].className = 'card'; }
+      phase = 'clear'; phaseT = 0.6;
+    } else if (phase === 'clear') {
+      round++;
+      startRound();
+    }
+  }
+
+  /* ================================================================
+     Mise a jour (pas fixe)
+     ================================================================ */
+  function update(dt) {
+    T += dt;
+    var i;
+    if (state === 'play' && phaseT > 0) {
+      phaseT -= dt;
+      if (phaseT <= 0) { phaseT = 0; phaseDone(); }
+    }
+    if (hintT > 0) { hintT -= dt; if (hintT <= 0) clearClass('hint'); }
+    if (state === 'celebrate') {
+      celebT -= dt;
+      // on laisse la derniere etoile arriver dans son rond, puis fanfare et confettis
+      if (!celebFired && celebT < 2.3) { celebFired = true; confetti(90); sfxWin(); }
+      if (celebT <= 0) { showWin(); confT = 0; }
+    }
+    if (state === 'win') {
+      confT -= dt;
+      if (confT <= 0) { confetti(25); confT = 1.2; }
+    }
+    // etoiles volantes : courbe vers le rond de l'objectif
+    for (i = 0; i < FLY_MAX; i++) {
+      var f = flyers[i];
+      if (!f.on) continue;
+      f.t += dt;
+      var k = f.t / f.dur;
+      if (k >= 1) { f.on = false; fillSlot(f.slot, f.animal); continue; }
+      if (Math.random() < 0.6) {
+        var px = flyX(f, k), py = flyY(f, k);
+        emit(px, py, (Math.random() - 0.5) * 80, (Math.random() - 0.5) * 80, 0.5, CONF_COLS[randInt(0, 5)], 8 + Math.random() * 8, 0, 0);
+      }
+    }
+    // particules
+    liveParts = 0;
+    for (i = 0; i < PMAX; i++) {
+      var p = parts[i];
+      if (!p.on) continue;
+      p.life -= dt;
+      if (p.life <= 0) { p.on = false; continue; }
+      p.vy += p.g * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+      if (p.kind === 1) p.x += Math.sin(T * 3 + p.rot) * 40 * dt;   // les confettis flottent
+      liveParts++;
+    }
+  }
+  function ease(k) { return k < 0.5 ? 2 * k * k : 1 - 2 * (1 - k) * (1 - k); }
+  function flyX(f, k) { var e = ease(k); return f.x0 + (slotCX(f.slot) - f.x0) * e; }
+  function flyY(f, k) { var e = ease(k); return f.y0 + (SLOT_CY - f.y0) * e - Math.sin(k * Math.PI) * 220; }
+
+  /* ================================================================
+     Rendu du canvas (seulement les particules et les etoiles volantes)
+     ================================================================ */
+  var wasDrawing = false;
+  function drawStar(x, y, r, rot) {
+    ctx.beginPath();
+    for (var i = 0; i < 10; i++) {
+      var a = rot + i * Math.PI / 5 - Math.PI / 2, rr = (i & 1) ? r * 0.45 : r;
+      if (i === 0) ctx.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+      else ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+  function render() {
+    var anyFly = false, i;
+    for (i = 0; i < FLY_MAX; i++) if (flyers[i].on) { anyFly = true; break; }
+    if (!anyFly && liveParts === 0) {
+      if (wasDrawing) { ctx.clearRect(0, 0, W, H); wasDrawing = false; }
+      return;                       // rien a dessiner : le canvas reste vide et on ne travaille pas
+    }
+    wasDrawing = true;
+    ctx.clearRect(0, 0, W, H);
+    for (i = 0; i < PMAX; i++) {
+      var p = parts[i];
+      if (!p.on) continue;
+      ctx.globalAlpha = clamp(p.life / p.max * 1.5, 0, 1);
+      ctx.fillStyle = p.col;
+      if (p.kind === 1) {
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+        ctx.restore();
+      } else {
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+    for (i = 0; i < FLY_MAX; i++) {
+      var f = flyers[i];
+      if (!f.on) continue;
+      var k = f.t / f.dur, x = flyX(f, k), y = flyY(f, k);
+      ctx.fillStyle = 'rgba(255,225,77,0.35)';
+      ctx.beginPath(); ctx.arc(x, y, 70, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffe14d';
+      drawStar(x, y, 55, T * 6);
+    }
+  }
+
+  /* ================================================================
+     Ecrans et selection des boutons (une seule profondeur de menu)
+     ================================================================ */
+  var screens = { start: $('start'), win: $('win') };
+  var homeCorner = $('home');
+  var curButtons = [], bsel = 0;
+  function showScreen(name) {
+    for (var k in screens) if (screens.hasOwnProperty(k)) screens[k].classList.toggle('on', k === name);
+    curButtons = name ? Array.prototype.slice.call(screens[name].querySelectorAll('.btn')) : [];
+    bsel = 0;
+    paintBtnSel();
+    homeCorner.classList.toggle('on', !name);
+    paintCardSel();
+  }
+  function paintBtnSel() { for (var i = 0; i < curButtons.length; i++) curButtons[i].classList.toggle('sel', i === bsel); }
+  function moveBtnSel(d) {
+    if (!curButtons.length) return;
+    var n = clamp(bsel + d, 0, curButtons.length - 1);
+    if (n !== bsel) { bsel = n; paintBtnSel(); sfxSelect(); }
+  }
+  function activate(action) {
+    var t = now();
+    if (t < actLock) return;
+    actLock = t + 500;
+    sfxConfirm();
+    if (action === 'play' || action === 'again') startGame();
+    else if (action === 'home') goHome();
+  }
+
+  // Cartes : survol = cadre blanc, clic = retourner
+  function bindCard(el, i) {
+    el.addEventListener('mouseenter', function () {
+      if (state !== 'play' || i === sel) return;
+      sel = i; paintCardSel();
+    });
+    el.addEventListener('click', function (e) {
+      e.stopPropagation(); initAudio();
+      if (now() - lastOkKey < 300) return;
+      if (state === 'play') { sel = i; paintCardSel(); pick(i); }
+    });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.btn'), function (el) {
+    el.addEventListener('mouseenter', function () {
+      var idx = curButtons.indexOf(el);
+      if (idx >= 0 && idx !== bsel) { bsel = idx; paintBtnSel(); }
+    });
+    el.addEventListener('click', function (e) {
+      e.stopPropagation(); initAudio();
+      if (now() - lastOkKey < 300) return;
+      activate(el.getAttribute('data-action'));
+    });
+  });
+  homeCorner.addEventListener('click', function (e) { e.stopPropagation(); if (state !== 'start') activate('home'); });
+  muteBtn.addEventListener('click', function (e) { e.stopPropagation(); initAudio(); toggleMute(); });
+
+  /* ================================================================
+     Clavier / telecommande
+     ================================================================ */
+  function keyOf(e) {
+    var k = e.key, c = e.keyCode;
+    if (k === 'ArrowLeft' || k === 'Left' || c === 37) return 'left';
+    if (k === 'ArrowRight' || k === 'Right' || c === 39) return 'right';
+    if (k === 'ArrowUp' || k === 'Up' || c === 38) return 'up';
+    if (k === 'ArrowDown' || k === 'Down' || c === 40) return 'down';
+    if (k === 'Enter' || k === ' ' || k === 'Spacebar' || k === 'Select' || c === 13 || c === 32) return 'ok';
+    if (k === 'Escape' || k === 'Backspace' || k === 'GoBack' || k === 'BrowserBack' ||
+        c === 27 || c === 8 || c === 461 || c === 10009) return 'back';
+    if (k === 'm' || k === 'M' || k === 'ColorF0Red' || c === 403) return 'mute';
+    return null;
+  }
+  function moveCardSel(dx, dy) {
+    var col = sel % COLS, row = Math.floor(sel / COLS);
+    col = clamp(col + dx, 0, COLS - 1);
+    row = clamp(row + dy, 0, CARDS / COLS - 1);
+    var n = row * COLS + col;
+    if (n !== sel) { sel = n; paintCardSel(); sfxSelect(); }
+  }
+
+  window.addEventListener('keydown', function (e) {
+    initAudio();
+    var k = keyOf(e);
+    if (!k) return;
+    if (k === 'back' && state === 'start') return;   // sur l'accueil, "retour" est laisse a la tele
+    e.preventDefault();
+    if (k === 'mute') { if (!e.repeat) toggleMute(); return; }
+    if (k === 'ok') lastOkKey = now();
+
+    if (state === 'play') {
+      if (k === 'left') moveCardSel(-1, 0);
+      else if (k === 'right') moveCardSel(1, 0);
+      else if (k === 'up') moveCardSel(0, -1);
+      else if (k === 'down') moveCardSel(0, 1);
+      else if (k === 'ok') { if (!e.repeat) pick(sel); }
+      else if (k === 'back') activate('home');
+      return;
+    }
+    if (state === 'celebrate') { if (k === 'back') activate('home'); return; }
+    // menus (accueil / victoire)
+    if (k === 'left' || k === 'up') { if (!e.repeat) moveBtnSel(-1); }
+    else if (k === 'right' || k === 'down') { if (!e.repeat) moveBtnSel(1); }
+    else if (k === 'ok') { if (!e.repeat && curButtons[bsel]) activate(curButtons[bsel].getAttribute('data-action')); }
+    else if (k === 'back') activate('home');
+  });
+
+  // Premier geste = deblocage du son ; pas de menu contextuel, pas de selection, pas de defilement
+  window.addEventListener('mousedown', function (e) { initAudio(); e.preventDefault(); });
+  window.addEventListener('touchstart', function () { initAudio(); }, { passive: true });
+  window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  document.addEventListener('selectstart', function (e) { e.preventDefault(); });
+  window.addEventListener('wheel', function (e) { e.preventDefault(); }, { passive: false });
+
+  /* ================================================================
+     Boucle : pas fixe 1/60 s, pause quand l'onglet est cache
+     ================================================================ */
+  var acc = 0, last = 0, running = !document.hidden, resetClock = true;
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      running = false;
+      if (AC && AC.state === 'running') { try { AC.suspend(); } catch (e) { /* rien */ } }
+    } else {
+      running = true;
+      resetClock = true;                 // pas de saut de temps au retour
+      if (AC && AC.state === 'suspended') { try { AC.resume(); } catch (e) { /* rien */ } }
+    }
+  });
+
+  function frame(ts) {
+    requestAnimationFrame(frame);
+    if (!running) return;
+    if (resetClock) { last = ts; acc = 0; resetClock = false; }
+    var dt = (ts - last) / 1000;
+    last = ts;
+    if (dt < 0) dt = 0;
+    if (dt > 0.25) dt = 0.25;            // evite la "spirale" apres un gros ralentissement
+    acc += dt;
+    var n = 0;
+    while (acc >= STEP && n < 8) { update(STEP); acc -= STEP; n++; }
+    if (n === 8) acc = 0;
+    render();
+  }
+
+  showScreen('start');
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

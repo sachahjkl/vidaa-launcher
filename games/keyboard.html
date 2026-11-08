@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>La course du renard</title>
+<!--
+  La course du renard — petit jeu de plateforme au clavier.
+  Flèches (ou ZQSD / WASD) pour courir, Espace ou flèche du haut pour sauter.
+  Pas de mort : tomber dans l'eau ramène le renard dans une bulle au dernier drapeau.
+  Ramasser des étoiles, passer les drapeaux, franchir l'arche d'arrivée = confettis.
+  Fichier autonome : pas de dépendance, pas d'image, sons synthétisés avec WebAudio.
+-->
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+    background: #7fd3ff; color: #fff;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+    font-family: "Trebuchet MS", "Arial Rounded MT Bold", Verdana, Arial, sans-serif;
+  }
+  #stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden; }
+  #cv { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; display: block; }
+
+  .screen {
+    position: absolute; left: 0; top: 0; width: 1920px; height: 1080px;
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    box-sizing: border-box;
+  }
+  .screen.on { display: flex; }
+  #start { background: rgba(20, 40, 90, 0.35); padding-bottom: 120px; }
+  #win { background: rgba(20, 40, 90, 0.35); padding-bottom: 160px; }
+
+  h1 {
+    font-size: 130px; margin: 0 0 40px; color: #ffe14d; letter-spacing: 2px;
+    text-shadow: 0 8px 0 #c0561a, 0 0 40px rgba(255, 220, 80, 0.5);
+  }
+  .keys { display: flex; align-items: flex-end; gap: 40px; margin-bottom: 60px; }
+  .row { display: flex; align-items: center; gap: 70px; }
+  .score { display: flex; align-items: center; gap: 24px; font-size: 120px; font-weight: bold; margin-bottom: 50px;
+    text-shadow: 0 6px 0 rgba(0, 0, 0, 0.3); }
+
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 30px;
+    min-width: 520px; height: 200px; padding: 0 70px; box-sizing: border-box;
+    border-radius: 100px; background: #ff7a2a; color: #fff;
+    font-size: 100px; font-weight: bold; cursor: pointer;
+    box-shadow: 0 16px 0 #b8501a, 0 24px 40px rgba(0, 0, 0, 0.35);
+    transition: transform 0.15s;
+  }
+  .btn.green { background: #3ccf6e; box-shadow: 0 16px 0 #23894a, 0 24px 40px rgba(0, 0, 0, 0.35); }
+  .btn.blue { background: #4aa8ff; box-shadow: 0 16px 0 #2a6cb0, 0 24px 40px rgba(0, 0, 0, 0.35); min-width: 240px; padding: 0 50px; }
+  .btn.sel { outline: 14px solid #fff; outline-offset: 10px; animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { transform: scale(1.08); } 50% { transform: scale(1.16); } }
+
+  .corner {
+    position: absolute; top: 24px; width: 120px; height: 120px; border-radius: 50%;
+    background: rgba(0, 40, 90, 0.35); display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  #home { left: 24px; display: none; }
+  #home.on { display: flex; }
+  #mute { right: 24px; }
+  #mute .off { display: none; }
+  #mute.muted { background: rgba(220, 50, 50, 0.6); }
+  #mute.muted .on { display: none; }
+  #mute.muted .off { display: block; }
+
+  .bravo { font-size: 200px; margin-bottom: 20px; }
+  .bravo span { display: inline-block; animation: hop 0.9s ease-in-out infinite; }
+  .bravo span:nth-child(2) { animation-delay: 0.1s; }
+  .bravo span:nth-child(3) { animation-delay: 0.2s; }
+  .bravo span:nth-child(4) { animation-delay: 0.3s; }
+  .bravo span:nth-child(5) { animation-delay: 0.4s; }
+  .bravo span:nth-child(7) { animation-delay: 0.5s; }
+  @keyframes hop { 0%, 100% { transform: translateY(0); } 40% { transform: translateY(-50px) rotate(-6deg); } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv" width="1920" height="1080"></canvas>
+
+  <!-- Accueil : titre, dessin des touches, JOUER -->
+  <div id="start" class="screen on">
+    <h1>La course du renard</h1>
+    <div class="keys">
+      <svg width="150" height="150" viewBox="0 0 100 100"><rect x="4" y="4" width="92" height="92" rx="18" fill="#fff" stroke="#355" stroke-width="4"/><path d="M66 26 L30 50 L66 74 Z" fill="#ff7a2a"/></svg>
+      <svg width="150" height="150" viewBox="0 0 100 100"><rect x="4" y="4" width="92" height="92" rx="18" fill="#fff" stroke="#355" stroke-width="4"/><path d="M34 26 L70 50 L34 74 Z" fill="#ff7a2a"/></svg>
+      <svg width="80" height="150" viewBox="0 0 50 100"><path d="M10 50 L40 50 M28 36 L42 50 L28 64" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg width="520" height="150" viewBox="0 0 350 100"><rect x="4" y="4" width="342" height="92" rx="18" fill="#fff" stroke="#355" stroke-width="4"/><path d="M150 70 L175 30 L200 70 Z" fill="#3ccf6e"/></svg>
+    </div>
+    <div class="btn" data-action="play">
+      <svg width="100" height="100" viewBox="0 0 100 100"><path d="M25 12 L88 50 L25 88 Z" fill="#fff"/></svg>
+      JOUER
+    </div>
+  </div>
+
+  <!-- Victoire -->
+  <div id="win" class="screen">
+    <h1 class="bravo"><span>B</span><span>R</span><span>A</span><span>V</span><span>O</span> <span>!</span></h1>
+    <div class="score">
+      <svg width="130" height="130" viewBox="0 0 100 100"><path d="M50 4 L62 36 L96 37 L69 58 L79 92 L50 72 L21 92 L31 58 L4 37 L38 36 Z" fill="#ffd93b" stroke="#fff" stroke-width="4" stroke-linejoin="round"/></svg>
+      <span id="score">0</span>
+    </div>
+    <div class="row">
+      <div class="btn green" data-action="again">
+        <svg width="110" height="110" viewBox="0 0 100 100"><path d="M50 16 A34 34 0 1 1 16 50" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round"/><path d="M0 54 L32 54 L16 28 Z" fill="#fff"/></svg>
+        REJOUER
+      </div>
+      <div class="btn blue" data-action="home">
+        <svg width="120" height="120" viewBox="0 0 100 100"><path d="M50 10 L94 50 L80 50 L80 90 L60 90 L60 66 L40 66 L40 90 L20 90 L20 50 L6 50 Z" fill="#fff"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <div id="home" class="corner">
+    <svg width="76" height="76" viewBox="0 0 100 100"><path d="M50 10 L94 50 L80 50 L80 90 L60 90 L60 66 L40 66 L40 90 L20 90 L20 50 L6 50 Z" fill="#fff"/></svg>
+  </div>
+  <div id="mute" class="corner">
+    <svg class="on" width="80" height="80" viewBox="0 0 100 100"><path d="M8 36 L28 36 L52 14 L52 86 L28 64 L8 64 Z" fill="#fff"/><path d="M64 34 Q74 50 64 66 M74 22 Q92 50 74 78" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round"/></svg>
+    <svg class="off" width="80" height="80" viewBox="0 0 100 100"><path d="M8 36 L28 36 L52 14 L52 86 L28 64 L8 64 Z" fill="#fff"/><path d="M64 36 L92 64 M92 36 L64 64" stroke="#fff" stroke-width="10" stroke-linecap="round"/></svg>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ================================================================
+     Constantes
+     ================================================================ */
+  var W = 1920, H = 1080;
+  var STEP = 1 / 60;
+  var GROUND = 900;             // dessus du sol
+  var WATER_Y = 970;            // surface de l'eau dans les trous
+  var PW = 84, PH = 104;        // boîte de collision du renard
+  var GRAV = 2600, MAX_FALL = 1800;
+  var JUMP_V = 1250;            // saut ≈ 300 px de haut, ≈ 500 px de long en courant
+  var SPRING_V = 1750;          // champignon-ressort ≈ 590 px de haut
+  var MAX_RUN = 560, ACC_G = 3600, ACC_A = 2400, FRICT = 4200;
+  var COYOTE = 0.12, JUMP_BUF = 0.15;
+  var CONF_COLS = ['#ffd93b', '#ff7eb6', '#5ee0ff', '#8dff6a', '#ffa94d', '#b18cff', '#ffffff'];
+  var NOTES = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.51];
+
+  function $(id) { return document.getElementById(id); }
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
+  function makeCanvas(w, h) { var c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+
+  /* ================================================================
+     Mise à l'échelle 1920x1080
+     ================================================================ */
+  var stage = $('stage'), cv = $('cv');
+  var ctx = cv.getContext('2d', { alpha: false });
+  var scale = 1, offX = 0, offY = 0;
+  function fit() {
+    var iw = window.innerWidth || W, ih = window.innerHeight || H;
+    scale = Math.min(iw / W, ih / H);
+    offX = (iw - W * scale) / 2; offY = (ih - H * scale) / 2;
+    stage.style.transform = 'translate(' + offX + 'px,' + offY + 'px) scale(' + scale + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+
+  /* ================================================================
+     Son
+     ================================================================ */
+  var AC = null, master = null, muted = false, noiseBuf = null;
+  try { muted = window.localStorage.getItem('renard-muet') === '1'; } catch (e) { /* rien */ }
+
+  function initAudio() {
+    if (AC) {
+      if (AC.state === 'suspended' && !document.hidden) { try { AC.resume(); } catch (e) { /* rien */ } }
+      return;
+    }
+    try {
+      var C = window.AudioContext || window.webkitAudioContext;
+      if (!C) return;
+      AC = new C();
+      master = AC.createGain();
+      master.gain.value = muted ? 0 : 0.5;
+      master.connect(AC.destination);
+      // bruit blanc (créé une fois) pour les éclaboussures
+      noiseBuf = AC.createBuffer(1, AC.sampleRate * 0.5, AC.sampleRate);
+      var d = noiseBuf.getChannelData(0);
+      for (var i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    } catch (e) { AC = null; }
+  }
+  function tone(freq, dur, type, vol, delay, slideTo) {
+    if (!AC || muted || AC.state !== 'running') return;
+    try {
+      var t = AC.currentTime + (delay || 0);
+      var o = AC.createOscillator(), g = AC.createGain();
+      o.type = type || 'sine';
+      o.frequency.setValueAtTime(freq, t);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol || 0.2, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(master);
+      o.start(t); o.stop(t + dur + 0.05);
+    } catch (e) { /* rien */ }
+  }
+  function noise(dur, vol) {
+    if (!AC || muted || !noiseBuf || AC.state !== 'running') return;
+    try {
+      var t = AC.currentTime, s = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
+      s.buffer = noiseBuf; f.type = 'lowpass'; f.frequency.value = 1200;
+      g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      s.connect(f); f.connect(g); g.connect(master);
+      s.start(t); s.stop(t + dur);
+    } catch (e) { /* rien */ }
+  }
+  function sfxJump() { tone(380, 0.16, 'sine', 0.18, 0, 760); }
+  function sfxLand() { tone(140, 0.08, 'sine', 0.15, 0, 80); }
+  function sfxStar(n) { var f = NOTES[n % NOTES.length]; tone(f, 0.2, 'triangle', 0.25); tone(f * 1.5, 0.2, 'triangle', 0.15, 0.06); }
+  function sfxSpring() { tone(200, 0.35, 'triangle', 0.25, 0, 900); }
+  function sfxSplash() { noise(0.5, 0.35); tone(300, 0.3, 'sine', 0.1, 0, 120); }
+  function sfxBubble() { tone(500, 0.12, 'sine', 0.2, 0, 1200); }
+  function sfxFlag() { tone(659.25, 0.15, 'triangle', 0.25); tone(783.99, 0.15, 'triangle', 0.25, 0.12); tone(1046.5, 0.3, 'triangle', 0.25, 0.24); }
+  function sfxSelect() { tone(880, 0.06, 'sine', 0.12); }
+  function sfxConfirm() { tone(660, 0.1, 'triangle', 0.25); tone(990, 0.18, 'triangle', 0.25, 0.09); }
+  function sfxWin() {
+    var seq = [523.25, 659.25, 783.99, 1046.5, 783.99, 1046.5];
+    for (var i = 0; i < seq.length; i++) tone(seq[i], 0.3, 'triangle', 0.28, i * 0.13);
+    tone(1318.51, 0.7, 'triangle', 0.25, 0.8);
+  }
+
+  var muteBtn = $('mute');
+  function paintMute() { muteBtn.classList.toggle('muted', muted); }
+  function toggleMute() {
+    muted = !muted;
+    if (master) master.gain.value = muted ? 0 : 0.5;
+    try { window.localStorage.setItem('renard-muet', muted ? '1' : '0'); } catch (e) { /* rien */ }
+    paintMute();
+    if (!muted) sfxSelect();
+  }
+  paintMute();
+
+  /* ================================================================
+     Le niveau (écrit à la main). x croît vers la droite, y vers le bas.
+     t: 0 = sol plein, 1 = plateforme (on passe à travers par en dessous), 2 = caisse
+     ================================================================ */
+  var solids = [], items = [], springs = [], cps = [], gaps = [];
+  var lastGroundEnd = null;
+  var FINISH_X = 9000, LEVEL_END = 9800;
+
+  function G(x0, x1) {
+    if (lastGroundEnd !== null) gaps.push({ x0: lastGroundEnd, x1: x0 });   // trou d'eau entre deux sols
+    solids.push({ x: x0, y: GROUND, w: x1 - x0, h: 400, t: 0 });
+    lastGroundEnd = x1;
+  }
+  function P(x, y, w) { solids.push({ x: x, y: y, w: w, h: 36, t: 1 }); }
+  function B(x, w, h) { solids.push({ x: x, y: GROUND - h, w: w, h: h, t: 2 }); }
+  function S(x, y) { items.push({ x: x, y: y, got: false }); }
+  function row(x, y, n, dx) { for (var i = 0; i < n; i++) S(x + i * dx, y); }
+  function arc(x, y, n, dx, hgt) {
+    for (var i = 0; i < n; i++) { var u = n > 1 ? i / (n - 1) : 0.5; S(x + i * dx, y - Math.sin(u * Math.PI) * hgt); }
+  }
+  function SP(x) { springs.push({ x: x, y: GROUND - 56, w: 120, h: 56, t: 0 }); }
+  function CP(x) { cps.push({ x: x, on: false, t: 0 }); }
+
+  (function buildLevel() {
+    // 1. On apprend : courir, sauter une caisse, puis une plus haute
+    G(-600, 1700);
+    row(450, GROUND - 90, 4, 110);
+    B(1000, 140, 110); arc(930, GROUND - 200, 4, 95, 90);
+    B(1380, 140, 170); S(1450, GROUND - 260);
+    // petit trou d'eau
+    arc(1690, GROUND - 170, 3, 110, 110);
+    G(1920, 3300); CP(2050);
+    // 2. Plateformes et premier ressort
+    P(2300, 700, 320); row(2360, 640, 3, 100);
+    P(2750, 540, 280); row(2800, 480, 3, 90);
+    SP(3100); S(3160, 560); S(3160, 440); S(3160, 320);
+    G(3560, 5100); CP(3680);
+    // 3. Escalier de caisses, ressort pour sauter au-dessus du grand trou
+    B(3900, 120, 100); B(4020, 120, 200); B(4140, 120, 300); S(4200, 540);
+    B(4260, 120, 150);
+    row(4500, GROUND - 90, 4, 100);
+    SP(4880); arc(4980, 520, 5, 110, 140);
+    P(5180, 760, 140);                      // pierre au milieu de l'eau
+    G(5400, 7100); CP(5520);
+    // 4. Escalier de plateformes
+    P(5800, 720, 240); row(5850, 660, 3, 70);
+    P(6150, 600, 240); row(6200, 540, 3, 70);
+    P(6500, 720, 240); row(6550, 660, 3, 70);
+    B(6850, 160, 120); arc(6800, GROUND - 220, 4, 90, 80);
+    G(7350, LEVEL_END); CP(7480);
+    // 5. Dernière ligne droite
+    row(7700, GROUND - 90, 6, 100);
+    B(8250, 140, 110); arc(8180, GROUND - 200, 4, 95, 90);
+    row(8550, GROUND - 90, 4, 100);
+  })();
+  var TOTAL_STARS = items.length;
+
+  /* ================================================================
+     Images pré-rendues : ciel, collines (en boucle), nuage, étoile
+     ================================================================ */
+  var sky = makeCanvas(W, H);
+  (function () {
+    var g = sky.getContext('2d');
+    var gr = g.createLinearGradient(0, 0, 0, H);
+    gr.addColorStop(0, '#4fb7ff'); gr.addColorStop(0.7, '#a9e4ff'); gr.addColorStop(1, '#d8f4ff');
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+    g.fillStyle = 'rgba(255,240,150,0.5)'; g.beginPath(); g.arc(1500, 250, 130, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#fff2a0'; g.beginPath(); g.arc(1500, 250, 95, 0, Math.PI * 2); g.fill();
+  })();
+
+  // Collines qui se répètent tous les 1920 px (périodes qui divisent 1920)
+  function makeHills(color, base, amp, k1, k2) {
+    var c = makeCanvas(W, 600), g = c.getContext('2d');
+    g.fillStyle = color; g.beginPath(); g.moveTo(0, 600);
+    for (var x = 0; x <= W; x += 20) {
+      g.lineTo(x, base - Math.sin(x / W * Math.PI * 2 * k1) * amp - Math.sin(x / W * Math.PI * 2 * k2 + 1) * amp * 0.4);
+    }
+    g.lineTo(W, 600); g.closePath(); g.fill();
+    return c;
+  }
+  var hillsFar = makeHills('#8fd6a8', 300, 90, 2, 5);
+  var hillsNear = makeHills('#5cbf7a', 400, 70, 3, 7);
+
+  var cloud = makeCanvas(360, 160);
+  (function () {
+    var g = cloud.getContext('2d');
+    g.fillStyle = '#ffffff';
+    var bl = [[90, 100, 60], [160, 75, 75], [240, 95, 60], [190, 115, 55], [120, 115, 45]];
+    for (var i = 0; i < bl.length; i++) { g.beginPath(); g.arc(bl[i][0], bl[i][1], bl[i][2], 0, Math.PI * 2); g.fill(); }
+  })();
+
+  function starPath(g, cx, cy, R, r) {
+    g.beginPath();
+    for (var i = 0; i < 10; i++) {
+      var a = -Math.PI / 2 + i * Math.PI / 5, rad = (i % 2) ? r : R;
+      if (i === 0) g.moveTo(cx + Math.cos(a) * rad, cy + Math.sin(a) * rad);
+      else g.lineTo(cx + Math.cos(a) * rad, cy + Math.sin(a) * rad);
+    }
+    g.closePath();
+  }
+  var starImg = makeCanvas(100, 100);
+  (function () {
+    var g = starImg.getContext('2d');
+    starPath(g, 50, 50, 42, 19);
+    g.shadowColor = '#ffb000'; g.shadowBlur = 10;
+    g.fillStyle = '#ffd93b'; g.fill(); g.shadowBlur = 0;
+    g.lineJoin = 'round'; g.lineWidth = 4; g.strokeStyle = '#fff'; g.stroke();
+    g.fillStyle = '#5a3a00';
+    g.beginPath(); g.arc(42, 50, 4, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(58, 50, 4, 0, Math.PI * 2); g.fill();
+  })();
+
+  /* ================================================================
+     Particules (pool en anneau)
+     ================================================================ */
+  var PMAX = 400, parts = [], pNext = 0;
+  for (var pi = 0; pi < PMAX; pi++) parts.push({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, col: '#fff', size: 10, kind: 0, rot: 0, vr: 0, g: 0, world: true });
+  function emit(x, y, vx, vy, life, col, size, kind, grav, world) {
+    var p = parts[pNext]; pNext = (pNext + 1) % PMAX;
+    p.on = true; p.x = x; p.y = y; p.vx = vx; p.vy = vy; p.life = life; p.col = col; p.size = size;
+    p.kind = kind; p.g = grav; p.world = world; p.rot = Math.random() * 6.28; p.vr = (Math.random() - 0.5) * 10;
+  }
+  function burst(x, y, n, col, speed) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2, sp = (0.3 + Math.random() * 0.7) * speed;
+      emit(x, y, Math.cos(a) * sp, Math.sin(a) * sp - speed * 0.3, 0.5 + Math.random() * 0.4,
+        col || CONF_COLS[i % CONF_COLS.length], 8 + Math.random() * 10, 0, 1200, true);
+    }
+  }
+  function confetti(n) {   // confettis attachés à l'écran (pas au monde)
+    for (var i = 0; i < n; i++) {
+      emit(Math.random() * W, -20 - Math.random() * 200, (Math.random() - 0.5) * 200, 150 + Math.random() * 250,
+        4 + Math.random() * 2, CONF_COLS[Math.floor(Math.random() * CONF_COLS.length)], 16 + Math.random() * 14, 1, 120, false);
+    }
+  }
+
+  /* ================================================================
+     État
+     ================================================================ */
+  var state = 'start';   // 'start' | 'play' | 'finish' | 'win'
+  var T = 0, camX = 0, finishT = 0, confT = 0;
+  var stars = 0, starPop = 0;
+  var lastCP = 150;
+  var hasMoved = false, hasJumped = false;
+  var p = { x: 150, y: GROUND - PH, vx: 0, vy: 0, onGround: true, face: 1, coyote: 0, jumpBuf: 0,
+            run: 0, squash: 0, pushT: 0, bubbleT: 0, splashed: false };
+
+  // Touches maintenues : identifiant de touche -> action ; compteurs par action
+  var held = {}, cntL = 0, cntR = 0, cntJ = 0;
+  function releaseAll() { held = {}; cntL = 0; cntR = 0; cntJ = 0; }
+
+  function resetLevel() {
+    var i;
+    for (i = 0; i < items.length; i++) items[i].got = false;
+    for (i = 0; i < cps.length; i++) { cps[i].on = false; cps[i].t = 0; }
+    for (i = 0; i < springs.length; i++) springs[i].t = 0;
+    for (i = 0; i < PMAX; i++) parts[i].on = false;
+    p.x = 150; p.y = GROUND - PH; p.vx = 0; p.vy = 0; p.onGround = true; p.face = 1;
+    p.coyote = 0; p.jumpBuf = 0; p.squash = 0; p.pushT = 0; p.bubbleT = 0; p.splashed = false;
+    stars = 0; starPop = 0; lastCP = 150; hasMoved = false; hasJumped = false; finishT = 0; confT = 0;
+    camX = p.x - 640;
+  }
+
+  /* ================================================================
+     Physique du renard
+     ================================================================ */
+  function overlaps(s) { return p.x < s.x + s.w && p.x + PW > s.x && p.y < s.y + s.h && p.y + PH > s.y; }
+
+  function updatePlayer(dt) {
+    var i, s;
+    // Dans la bulle : on flotte, puis la bulle éclate au-dessus du drapeau
+    if (p.bubbleT > 0) {
+      p.bubbleT -= dt;
+      if (p.bubbleT <= 0) {
+        burst(p.x + PW / 2, p.y + PH / 2, 16, '#bfeaff', 400);
+        sfxBubble();
+        p.vy = 0; p.splashed = false;
+      }
+      return;
+    }
+
+    var dir = 0, maxRun = MAX_RUN;
+    if (state === 'play') {
+      if (cntL > 0) dir -= 1;
+      if (cntR > 0) dir += 1;
+      if (dir !== 0) hasMoved = true;
+    } else if (state === 'finish' || state === 'win') {
+      dir = (p.x + PW / 2 < FINISH_X + 320) ? 1 : 0;    // le renard passe l'arche tout seul
+      maxRun = 320;
+    }
+
+    if (dir !== 0) {
+      p.face = dir;
+      var a = p.onGround ? ACC_G : ACC_A;
+      if (p.vx * dir < 0) a *= 1.8;                       // demi-tour vif
+      p.vx = clamp(p.vx + dir * a * dt, -maxRun, maxRun);
+    } else {
+      var f = (p.onGround ? FRICT : FRICT * 0.4) * dt;
+      if (Math.abs(p.vx) <= f) p.vx = 0; else p.vx -= (p.vx > 0 ? f : -f);
+    }
+
+    // Saut : tampon + temps « coyote » ; maintenir la touche fait rebondir à chaque atterrissage
+    if (p.onGround) p.coyote = COYOTE; else p.coyote -= dt;
+    if (p.jumpBuf > 0) p.jumpBuf -= dt;
+    var want = false, jv = JUMP_V;
+    if (state === 'play') want = p.jumpBuf > 0 || cntJ > 0;
+    else if (dir === 0 && state !== 'start') { want = true; jv = 800; }  // petits bonds de joie à l'arrivée
+    if (want && p.coyote > 0) {
+      p.vy = -jv; p.coyote = 0; p.jumpBuf = 0; p.onGround = false;
+      if (state === 'play') hasJumped = true;
+      sfxJump();
+      for (i = 0; i < 6; i++) emit(p.x + PW / 2, p.y + PH, (Math.random() - 0.5) * 300, -Math.random() * 150, 0.4, '#e8d9b0', 12, 0, 600, true);
+    }
+
+    p.vy = Math.min(p.vy + GRAV * dt, MAX_FALL);
+
+    // Axe X : caisses et sol (pas les plateformes)
+    p.x += p.vx * dt;
+    var pushing = false;
+    for (i = 0; i < solids.length; i++) {
+      s = solids[i];
+      if (s.t === 1 || !overlaps(s)) continue;
+      // presque au-dessus du bord et en train de tomber : on laisse l'axe Y le poser dessus (pas d'accroc)
+      if (p.vy >= 0 && p.y + PH - s.y < 18) continue;
+      if (p.x + PW / 2 < s.x + s.w / 2) { p.x = s.x - PW; if (dir > 0) pushing = true; }
+      else { p.x = s.x + s.w; if (dir < 0) pushing = true; }
+      p.vx = 0;
+    }
+    if (p.x < -150) { p.x = -150; p.vx = 0; }
+    if (p.x > LEVEL_END - PW - 40) { p.x = LEVEL_END - PW - 40; p.vx = 0; }
+    p.pushT = pushing && p.onGround ? p.pushT + dt : 0;
+
+    // Axe Y
+    var prevBottom = p.y + PH, wasGround = p.onGround, vyBefore = p.vy;
+    p.y += p.vy * dt;
+    p.onGround = false;
+    for (i = 0; i < solids.length; i++) {
+      s = solids[i];
+      if (!overlaps(s)) continue;
+      if (s.t === 1) {
+        if (p.vy >= 0 && prevBottom <= s.y + 1) { p.y = s.y - PH; p.vy = 0; p.onGround = true; }
+      } else if (p.vy >= 0) { p.y = s.y - PH; p.vy = 0; p.onGround = true; }
+      else { p.y = s.y + s.h; p.vy = 0; }
+    }
+
+    // Ressorts : on rebondit en tombant dessus, et aussi en marchant dessus (plus facile à découvrir)
+    for (i = 0; i < springs.length; i++) {
+      s = springs[i];
+      if (vyBefore >= 0 && overlaps(s)) {
+        p.y = s.y - PH; p.vy = -SPRING_V; p.onGround = false; s.t = 0.3;
+        sfxSpring();
+        burst(s.x + s.w / 2, s.y, 10, '#ff5a8a', 400);
+      }
+    }
+
+    // Atterrissage : petit écrasement + poussière
+    if (p.onGround && !wasGround && vyBefore > 500) {
+      p.squash = 0.15;
+      sfxLand();
+      for (i = 0; i < 8; i++) emit(p.x + PW / 2 + (Math.random() - 0.5) * 60, p.y + PH, (Math.random() - 0.5) * 400, -Math.random() * 120, 0.4, '#e8d9b0', 12, 0, 600, true);
+    }
+    if (p.squash > 0) p.squash -= dt;
+    p.run += Math.abs(p.vx) * dt / 38;
+
+    // Eau : éclaboussure, puis retour au dernier drapeau dans une bulle (pas de punition)
+    if (!p.splashed && p.y + PH > WATER_Y) {
+      p.splashed = true;
+      sfxSplash();
+      for (i = 0; i < 24; i++) emit(p.x + PW / 2, WATER_Y, (Math.random() - 0.5) * 500, -300 - Math.random() * 500, 0.8, i % 2 ? '#ffffff' : '#7fd3ff', 14, 0, 1500, true);
+    }
+    if (p.y > H + 60) {
+      p.x = lastCP + 40; p.y = GROUND - PH - 260;
+      p.vx = 0; p.vy = 0; p.onGround = false; p.bubbleT = 1.2; p.face = 1;
+    }
+
+    // Étoiles à ramasser (cercle généreux)
+    var cx = p.x + PW / 2, cy = p.y + PH / 2;
+    for (i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (it.got) continue;
+      if (Math.abs(it.x - cx) < PW / 2 + 34 && Math.abs(it.y - cy) < PH / 2 + 34) {
+        it.got = true; stars++; starPop = 0.3;
+        sfxStar(stars);
+        burst(it.x, it.y, 14, '#ffd93b', 500);
+      }
+    }
+
+    // Drapeaux
+    for (i = 0; i < cps.length; i++) {
+      var c = cps[i];
+      if (!c.on && cx > c.x - 30) {
+        c.on = true; lastCP = c.x;
+        sfxFlag();
+        burst(c.x, GROUND - 220, 20, null, 600);
+      }
+      if (c.on && c.t < 1) c.t = Math.min(1, c.t + dt * 2);
+    }
+
+    // Arrivée
+    if (state === 'play' && cx >= FINISH_X) {
+      state = 'finish'; finishT = 0; confT = 0;
+      sfxWin(); confetti(150);
+      releaseAll();
+    }
+  }
+
+  /* ================================================================
+     Mise à jour générale
+     ================================================================ */
+  function update(dt) {
+    var i;
+    T += dt;
+    if (state !== 'start') updatePlayer(dt);
+    if (starPop > 0) starPop -= dt;
+    for (i = 0; i < springs.length; i++) if (springs[i].t > 0) springs[i].t -= dt;
+
+    if (state === 'finish' || state === 'win') {
+      finishT += dt;
+      confT -= dt;
+      if (finishT < 6 && confT <= 0) { confetti(6); confT = 0.12; }
+      if (state === 'finish' && finishT > 1.6) showWin();
+    }
+
+    // Caméra horizontale douce
+    var target = clamp(p.x - 640, -200, LEVEL_END - W);
+    camX += (target - camX) * (1 - Math.exp(-dt * 6));
+
+    for (i = 0; i < PMAX; i++) {
+      var q = parts[i];
+      if (!q.on) continue;
+      q.life -= dt;
+      if (q.life <= 0 || q.y > H + 80) { q.on = false; continue; }
+      q.vy += q.g * dt;
+      if (q.kind === 1) q.vx += Math.sin(T * 3 + q.rot) * 40 * dt;
+      q.x += q.vx * dt; q.y += q.vy * dt; q.rot += q.vr * dt;
+    }
+  }
+
+  /* ================================================================
+     Dessin
+     ================================================================ */
+  function rr(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); }
+  function ellipse(x, y, rx, ry) { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); ctx.fill(); }
+
+  function drawParallax(img, factor, y) {
+    var off = -((camX * factor) % W);
+    if (off > 0) off -= W;
+    ctx.drawImage(img, Math.round(off), y);
+    ctx.drawImage(img, Math.round(off) + W, y);
+  }
+
+  // Le renard. (cx, feet) = centre bas de la boîte, en coordonnées écran.
+  function drawFox(cx, feet) {
+    var air = !p.onGround && p.bubbleT <= 0;
+    var happy = state === 'finish' || state === 'win' || starPop > 0;
+    var sq = p.squash > 0 ? p.squash / 0.15 : 0;
+    var stretch = air ? clamp(-p.vy / 6000, -0.08, 0.12) : 0;
+
+    if (p.onGround) {
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ellipse(cx, feet + 4, 60, 12);
+    }
+    ctx.save();
+    ctx.translate(cx, feet);
+    ctx.scale(p.face * (1 + sq * 0.25 - stretch), 1 - sq * 0.22 + stretch);
+
+    // queue (derrière), qui remue
+    ctx.save();
+    ctx.translate(-36, -58);
+    ctx.rotate(-0.5 + Math.sin(T * 8) * 0.25);
+    ctx.fillStyle = '#ff8c2a'; ellipse(-42, 0, 48, 22);
+    ctx.fillStyle = '#fff4e6'; ellipse(-80, 0, 16, 14);
+    ctx.restore();
+
+    // pattes : elles tournent en courant, repliées en l'air
+    ctx.fillStyle = '#d9640f';
+    var moving = Math.abs(p.vx) > 20 && p.onGround;
+    for (var i = 0; i < 4; i++) {
+      var lx = i < 2 ? -24 + i * 12 : 18 + (i - 2) * 12;
+      var ph = p.run + (i % 2 ? Math.PI : 0) + (i < 2 ? 0 : Math.PI / 2);
+      var lift = air ? 14 : (moving ? Math.max(0, Math.sin(ph)) * 16 : 0);
+      var sw = moving ? Math.cos(ph) * 8 : 0;
+      rr(lx - 8 + sw, -42 - lift, 16, 42, 8); ctx.fill();
+    }
+
+    // corps et ventre
+    ctx.fillStyle = '#ff8c2a'; ellipse(0, -60, 52, 34);
+    ctx.fillStyle = '#fff4e6'; ellipse(10, -50, 30, 19);
+
+    // tête
+    ctx.fillStyle = '#ff8c2a';
+    ctx.beginPath(); ctx.moveTo(14, -126); ctx.lineTo(22, -170); ctx.lineTo(44, -132); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(44, -132); ctx.lineTo(66, -166); ctx.lineTo(68, -122); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#5a2a10';
+    ctx.beginPath(); ctx.moveTo(22, -134); ctx.lineTo(25, -158); ctx.lineTo(36, -136); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(52, -134); ctx.lineTo(63, -156); ctx.lineTo(63, -128); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ff8c2a'; circle(40, -104, 40);
+    ctx.fillStyle = '#fff4e6'; ellipse(60, -88, 28, 18);
+    ctx.fillStyle = '#2a1a10'; circle(86, -94, 8);
+    // œil
+    if (happy) {
+      ctx.strokeStyle = '#2a1a10'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.arc(50, -110, 9, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+    } else if ((T % 3.7) < 0.12) {
+      ctx.fillStyle = '#2a1a10'; ctx.fillRect(42, -112, 16, 5);
+    } else {
+      ctx.fillStyle = '#2a1a10'; circle(50, -110, 8);
+      ctx.fillStyle = '#ffffff'; circle(53, -113, 3);
+    }
+    // joue rose
+    ctx.fillStyle = 'rgba(255,120,150,0.6)'; circle(32, -88, 8);
+    ctx.restore();
+  }
+
+  // Touche de clavier dessinée (aide). kind : 'left' | 'right' | 'up' | 'space'
+  function drawKey(x, y, kind, sc) {
+    var w = kind === 'space' ? 260 : 110, h = 110;
+    ctx.save();
+    ctx.translate(x, y); ctx.scale(sc, sc);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'; rr(-w / 2, -h / 2 + 10, w, h, 22); ctx.fill();
+    ctx.fillStyle = '#ffffff'; rr(-w / 2, -h / 2, w, h, 22); ctx.fill();
+    ctx.fillStyle = kind === 'space' || kind === 'up' ? '#3ccf6e' : '#ff7a2a';
+    ctx.beginPath();
+    if (kind === 'left') { ctx.moveTo(22, -30); ctx.lineTo(-26, 0); ctx.lineTo(22, 30); }
+    else if (kind === 'right') { ctx.moveTo(-22, -30); ctx.lineTo(26, 0); ctx.lineTo(-22, 30); }
+    else { ctx.moveTo(-30, 22); ctx.lineTo(0, -26); ctx.lineTo(30, 22); }
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  var starText = '0', starTextN = 0;   // texte du compteur, recalculé seulement s'il change
+
+  function render() {
+    var i, s, sx;
+    var cam = Math.round(camX);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.drawImage(sky, 0, 0);
+
+    // nuages qui dérivent lentement
+    for (i = 0; i < 5; i++) {
+      var cxp = ((i * 520 + T * 12 - camX * 0.1) % 2600 + 2600) % 2600 - 360;
+      ctx.drawImage(cloud, Math.round(cxp), 80 + (i % 3) * 90);
+    }
+    drawParallax(hillsFar, 0.2, GROUND - 420);
+    drawParallax(hillsNear, 0.45, GROUND - 360);
+
+    ctx.translate(-cam, 0);
+
+    // eau dans les trous
+    for (i = 0; i < gaps.length; i++) {
+      var gp = gaps[i];
+      if (gp.x1 < cam || gp.x0 > cam + W) continue;
+      ctx.fillStyle = '#2f8fd8'; ctx.fillRect(gp.x0, WATER_Y, gp.x1 - gp.x0, H - WATER_Y);
+      ctx.fillStyle = '#7fd3ff';
+      for (sx = gp.x0; sx < gp.x1; sx += 40) {
+        ctx.fillRect(sx, WATER_Y - 6 + Math.sin(T * 3 + sx * 0.05) * 5, 26, 10);
+      }
+    }
+
+    // sol, caisses, plateformes
+    for (i = 0; i < solids.length; i++) {
+      s = solids[i];
+      if (s.x + s.w < cam || s.x > cam + W) continue;
+      if (s.t === 0) {
+        ctx.fillStyle = '#b5743c'; ctx.fillRect(s.x, s.y, s.w, H - s.y);
+        ctx.fillStyle = '#9a5f2e';
+        for (sx = s.x + 40; sx < s.x + s.w - 20; sx += 120) { ctx.fillRect(sx, s.y + 80, 30, 18); ctx.fillRect(sx + 60, s.y + 130, 22, 14); }
+        ctx.fillStyle = '#5cc85a'; rr(s.x - 6, s.y - 8, s.w + 12, 40, 18); ctx.fill();
+      } else if (s.t === 1) {
+        ctx.fillStyle = '#9a5f2e'; rr(s.x, s.y + 6, s.w, s.h - 6, 14); ctx.fill();
+        ctx.fillStyle = '#5cc85a'; rr(s.x - 4, s.y - 4, s.w + 8, 22, 11); ctx.fill();
+      } else {
+        ctx.fillStyle = '#f0a848'; rr(s.x, s.y, s.w, s.h, 14); ctx.fill();
+        ctx.strokeStyle = '#b5743c'; ctx.lineWidth = 8;
+        rr(s.x + 4, s.y + 4, s.w - 8, s.h - 8, 10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(s.x + 14, s.y + 14); ctx.lineTo(s.x + s.w - 14, s.y + s.h - 14);
+        ctx.moveTo(s.x + s.w - 14, s.y + 14); ctx.lineTo(s.x + 14, s.y + s.h - 14); ctx.stroke();
+      }
+    }
+
+    // ressorts (champignons rebondissants)
+    for (i = 0; i < springs.length; i++) {
+      s = springs[i];
+      if (s.x + s.w < cam || s.x > cam + W) continue;
+      var squeeze = s.t > 0 ? Math.sin((s.t / 0.3) * Math.PI) * 18 : 0;
+      ctx.fillStyle = '#fff4e6'; rr(s.x + 40, s.y + 20, 40, 36, 10); ctx.fill();
+      ctx.fillStyle = '#ff5a8a';
+      ctx.beginPath(); ctx.ellipse(s.x + 60, s.y + 22 + squeeze * 0.5, 64 + squeeze, 34 - squeeze * 0.6, 0, Math.PI, 0); ctx.fill();
+      ctx.fillStyle = '#ffffff'; circle(s.x + 38, s.y + 6 + squeeze * 0.5, 9); circle(s.x + 78, s.y + 2 + squeeze * 0.5, 7);
+    }
+
+    // drapeaux (gris en bas, puis montent en couleur)
+    for (i = 0; i < cps.length; i++) {
+      var c = cps[i];
+      if (c.x < cam - 100 || c.x > cam + W + 100) continue;
+      ctx.fillStyle = '#6b6b80'; ctx.fillRect(c.x - 6, GROUND - 240, 12, 240);
+      ctx.fillStyle = '#ffd93b'; circle(c.x, GROUND - 246, 12);
+      var fy = GROUND - 60 - c.t * 170, wv = Math.sin(T * 6) * 8;
+      ctx.fillStyle = c.on ? '#3ccf6e' : '#c8c8d8';
+      ctx.beginPath(); ctx.moveTo(c.x + 6, fy - 30); ctx.lineTo(c.x + 100, fy + wv); ctx.lineTo(c.x + 6, fy + 30); ctx.closePath(); ctx.fill();
+    }
+
+    // arche d'arrivée en damier
+    if (FINISH_X + 200 > cam && FINISH_X - 200 < cam + W) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(FINISH_X - 140, GROUND - 360, 24, 360); ctx.fillRect(FINISH_X + 116, GROUND - 360, 24, 360);
+      for (var bx = 0; bx < 10; bx++) for (var by = 0; by < 2; by++) {
+        ctx.fillStyle = (bx + by) % 2 ? '#222' : '#fff';
+        ctx.fillRect(FINISH_X - 140 + bx * 28, GROUND - 400 + by * 28 + Math.sin(T * 3 + bx * 0.6) * 4, 28, 28);
+      }
+      ctx.fillStyle = '#ff5a8a'; circle(FINISH_X - 128, GROUND - 410, 18); circle(FINISH_X + 128, GROUND - 410, 18);
+    }
+
+    // étoiles
+    for (i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (it.got || it.x < cam - 60 || it.x > cam + W + 60) continue;
+      ctx.drawImage(starImg, it.x - 50, it.y - 50 + Math.sin(T * 3 + it.x * 0.01) * 8);
+    }
+
+    // renard (et sa bulle)
+    var fx = p.x + PW / 2, ffeet = p.y + PH;
+    if (p.bubbleT > 0) ffeet += Math.sin(T * 4) * 10;
+    drawFox(fx, ffeet);
+    if (p.bubbleT > 0) {
+      ctx.fillStyle = 'rgba(190,234,255,0.35)'; circle(fx + 10, ffeet - 80, 125);
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(fx + 10, ffeet - 80, 125, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#ffffff'; circle(fx - 50, ffeet - 150, 14);
+    }
+
+    // particules du monde
+    for (i = 0; i < PMAX; i++) {
+      var q = parts[i];
+      if (!q.on || !q.world) continue;
+      ctx.globalAlpha = q.life < 0.4 ? q.life / 0.4 : 1;
+      ctx.fillStyle = q.col;
+      ctx.fillRect(q.x - q.size / 2, q.y - q.size / 2, q.size, q.size);
+    }
+    ctx.globalAlpha = 1;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    // aides : touches dessinées au-dessus du renard
+    if (state === 'play' && p.bubbleT <= 0) {
+      var hx = fx - cam, hy = p.y - 150, pulse = 1 + Math.sin(T * 6) * 0.08;
+      if (!hasMoved) {
+        drawKey(hx - 75, hy, 'left', pulse); drawKey(hx + 75, hy, 'right', pulse);
+      } else if (p.pushT > 0.4 || (!hasJumped && p.x > 750)) {
+        drawKey(hx - 95, hy, 'up', pulse); drawKey(hx + 110, hy, 'space', pulse);
+      }
+    }
+
+    // confettis (écran)
+    for (i = 0; i < PMAX; i++) {
+      var k = parts[i];
+      if (!k.on || k.world) continue;
+      ctx.globalAlpha = k.life < 0.5 ? k.life * 2 : 1;
+      ctx.fillStyle = k.col;
+      var co = Math.cos(k.rot), sn = Math.sin(k.rot), fl = Math.cos(k.rot * 1.7);
+      ctx.setTransform(co * fl, sn * fl, -sn, co, k.x, k.y);
+      ctx.fillRect(-k.size / 2, -k.size / 4, k.size, k.size / 2);
+    }
+    ctx.globalAlpha = 1;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    if (state !== 'start') drawHud();
+  }
+
+  // Compteur d'étoiles + barre de progression (renard -> arche)
+  function drawHud() {
+    var sp = starPop > 0 ? 1 + Math.sin((starPop / 0.3) * Math.PI) * 0.35 : 1;
+    ctx.setTransform(sp, 0, 0, sp, 220, 84);
+    ctx.drawImage(starImg, -50, -50);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (starTextN !== stars) { starTextN = stars; starText = String(stars); }
+    ctx.font = 'bold 76px "Trebuchet MS", Arial, sans-serif';
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    ctx.lineWidth = 10; ctx.strokeStyle = 'rgba(0,40,90,0.6)'; ctx.lineJoin = 'round';
+    ctx.strokeText(starText, 280, 88);
+    ctx.fillStyle = '#ffffff'; ctx.fillText(starText, 280, 88);
+
+    var x0 = 560, x1 = 1360, y = 84;
+    ctx.fillStyle = 'rgba(0,40,90,0.35)'; rr(x0 - 20, y - 26, x1 - x0 + 40, 52, 26); ctx.fill();
+    var prog = clamp((p.x + PW / 2 - 150) / (FINISH_X - 150), 0, 1);
+    ctx.fillStyle = '#ffd93b'; rr(x0 - 10, y - 16, (x1 - x0) * prog + 20, 32, 16); ctx.fill();
+    for (var i = 0; i < cps.length; i++) {
+      var cxp = x0 + (x1 - x0) * clamp((cps[i].x - 150) / (FINISH_X - 150), 0, 1);
+      ctx.fillStyle = cps[i].on ? '#3ccf6e' : '#ffffff'; circle(cxp, y, 12);
+    }
+    // arrivée : petit damier
+    for (var b = 0; b < 4; b++) { ctx.fillStyle = b % 3 ? '#222' : '#fff'; ctx.fillRect(x1 + 20 + (b % 2) * 26, y - 26 + (b >> 1) * 26, 26, 26); }
+    // tête de renard
+    var hx = x0 + (x1 - x0) * prog;
+    ctx.fillStyle = '#ff8c2a';
+    ctx.beginPath(); ctx.moveTo(hx - 30, y - 10); ctx.lineTo(hx - 24, y - 50); ctx.lineTo(hx - 6, y - 24); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(hx + 30, y - 10); ctx.lineTo(hx + 24, y - 50); ctx.lineTo(hx + 6, y - 24); ctx.closePath(); ctx.fill();
+    circle(hx, y, 34);
+    ctx.fillStyle = '#fff4e6'; ellipse(hx, y + 14, 20, 13);
+    ctx.fillStyle = '#2a1a10'; circle(hx - 12, y - 6, 5); circle(hx + 12, y - 6, 5); circle(hx, y + 8, 5);
+  }
+
+  /* ================================================================
+     Écrans et sélection
+     ================================================================ */
+  var screens = { start: $('start'), win: $('win') };
+  var homeCorner = $('home');
+  var curButtons = [], sel = 0, actLock = 0;
+
+  function showScreen(name) {
+    for (var k in screens) if (screens.hasOwnProperty(k)) screens[k].classList.toggle('on', k === name);
+    curButtons = name ? Array.prototype.slice.call(screens[name].querySelectorAll('.btn')) : [];
+    sel = 0; paintSel();
+    homeCorner.classList.toggle('on', !name);
+  }
+  function paintSel() { for (var i = 0; i < curButtons.length; i++) curButtons[i].classList.toggle('sel', i === sel); }
+  function moveSel(d) {
+    if (!curButtons.length) return;
+    var n = clamp(sel + d, 0, curButtons.length - 1);
+    if (n !== sel) { sel = n; paintSel(); sfxSelect(); }
+  }
+  function startGame() { resetLevel(); state = 'play'; showScreen(null); }
+  function goHome() { resetLevel(); state = 'start'; showScreen('start'); actLock = now() + 400; }
+  function showWin() {
+    state = 'win';
+    $('score').textContent = stars + ' / ' + TOTAL_STARS;
+    showScreen('win');
+    actLock = now() + 1000;     // le doigt encore sur Espace ne relance pas tout de suite
+  }
+  function activate(action) {
+    var t = now();
+    if (t < actLock) return;
+    actLock = t + 500;
+    sfxConfirm();
+    if (action === 'play' || action === 'again') startGame();
+    else if (action === 'home') goHome();
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.btn'), function (el) {
+    el.addEventListener('mouseenter', function () {
+      var idx = curButtons.indexOf(el);
+      if (idx >= 0 && idx !== sel) { sel = idx; paintSel(); }
+    });
+    el.addEventListener('click', function (e) { e.stopPropagation(); initAudio(); activate(el.getAttribute('data-action')); });
+  });
+  homeCorner.addEventListener('click', function (e) { e.stopPropagation(); if (state !== 'start') activate('home'); });
+  muteBtn.addEventListener('click', function (e) { e.stopPropagation(); initAudio(); toggleMute(); });
+
+  /* ================================================================
+     Clavier. e.code = position physique (marche en AZERTY et QWERTY).
+     ================================================================ */
+  function actionOf(e) {
+    var c = e.code || '', k = e.key || '', kc = e.keyCode;
+    if (c === 'ArrowLeft' || c === 'KeyA' || c === 'KeyQ' || k === 'ArrowLeft' || k === 'Left' || kc === 37) return 'left';
+    if (c === 'ArrowRight' || c === 'KeyD' || k === 'ArrowRight' || k === 'Right' || kc === 39) return 'right';
+    if (c === 'ArrowUp' || c === 'KeyW' || c === 'KeyZ' || k === 'ArrowUp' || k === 'Up' || kc === 38) return 'up';
+    if (c === 'ArrowDown' || c === 'KeyS' || k === 'ArrowDown' || k === 'Down' || kc === 40) return 'down';
+    if (c === 'Space' || c === 'Enter' || c === 'NumpadEnter' || k === ' ' || k === 'Enter' || kc === 32 || kc === 13) return 'ok';
+    if (c === 'Escape' || c === 'Backspace' || k === 'Escape' || k === 'Backspace' || kc === 27 || kc === 8 || kc === 461 || kc === 10009) return 'back';
+    if (k === 'm' || k === 'M' || c === 'KeyM') return 'mute';
+    return null;
+  }
+  function keyId(e) { return e.code || e.key || String(e.keyCode); }
+
+  window.addEventListener('keydown', function (e) {
+    initAudio();
+    var a = actionOf(e);
+    if (!a) return;
+    if (a === 'back' && state === 'start') return;     // laissé à la télé
+    e.preventDefault();
+
+    // suivi des touches maintenues (pour courir / rebondir)
+    var id = keyId(e);
+    if (!held[id]) {
+      held[id] = a;
+      if (a === 'left') cntL++;
+      else if (a === 'right') cntR++;
+      else if (a === 'up' || a === 'ok') cntJ++;
+    }
+
+    if (a === 'mute') { if (!e.repeat) toggleMute(); return; }
+
+    if (state === 'play') {
+      if ((a === 'up' || a === 'ok') && !e.repeat) p.jumpBuf = JUMP_BUF;
+      else if (a === 'back') activate('home');
+      return;
+    }
+    if (state === 'finish') { if (a === 'back') activate('home'); return; }
+    if (e.repeat) return;
+    if (a === 'left' || a === 'up') moveSel(-1);
+    else if (a === 'right' || a === 'down') moveSel(1);
+    else if (a === 'ok') { if (curButtons[sel]) activate(curButtons[sel].getAttribute('data-action')); }
+    else if (a === 'back') activate('home');
+  });
+  window.addEventListener('keyup', function (e) {
+    var id = keyId(e), a = held[id];
+    if (!a) return;
+    held[id] = null;
+    if (a === 'left') cntL = Math.max(0, cntL - 1);
+    else if (a === 'right') cntR = Math.max(0, cntR - 1);
+    else if (a === 'up' || a === 'ok') cntJ = Math.max(0, cntJ - 1);
+  });
+  // perte du focus : plus aucune touche n'est « collée »
+  window.addEventListener('blur', releaseAll);
+
+  window.addEventListener('mousedown', function (e) { initAudio(); e.preventDefault(); });
+  window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  document.addEventListener('selectstart', function (e) { e.preventDefault(); });
+  window.addEventListener('wheel', function (e) { e.preventDefault(); }, { passive: false });
+
+  /* ================================================================
+     Boucle à pas fixe, pause si l'onglet est caché
+     ================================================================ */
+  var acc = 0, last = 0, running = !document.hidden, resetClock = true;
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      running = false;
+      releaseAll();
+      if (AC && AC.state === 'running') { try { AC.suspend(); } catch (e) { /* rien */ } }
+    } else {
+      running = true; resetClock = true;
+      if (AC && AC.state === 'suspended') { try { AC.resume(); } catch (e) { /* rien */ } }
+    }
+  });
+
+  function frame(ts) {
+    requestAnimationFrame(frame);
+    if (!running) return;
+    if (resetClock) { last = ts; acc = 0; resetClock = false; }
+    var dt = (ts - last) / 1000;
+    last = ts;
+    if (dt < 0) dt = 0;
+    if (dt > 0.25) dt = 0.25;
+    acc += dt;
+    var n = 0;
+    while (acc >= STEP && n < 8) { update(STEP); acc -= STEP; n++; }
+    if (n === 8) acc = 0;
+    render();
+  }
+
+  resetLevel();
+  showScreen('start');
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

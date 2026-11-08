@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<title>labo</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e1116; color: #cfe3d4;
+    font: 18px/1.45 ui-monospace, Menlo, Consolas, monospace; }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  header { padding: 14px 20px; border-bottom: 1px solid #1e2630; display: flex;
+    align-items: baseline; gap: 16px; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: 1px; color: #e8f0ea; }
+  header span { color: #6c7a75; font-size: 14px; }
+  #out { flex: 1; overflow: auto; padding: 16px 20px; white-space: pre-wrap;
+    word-break: break-word; }
+  .cmd { color: #9ad2a8; }
+  .err { color: #f2a0a0; }
+  #bar { display: flex; gap: 10px; padding: 12px 20px; border-top: 1px solid #1e2630;
+    background: #0b0e12; }
+  #prompt { color: #7fd4a0; }
+  input { flex: 1; background: #131a20; border: 1px solid #24303a; color: #e8f0ea;
+    font: inherit; padding: 12px 14px; border-radius: 8px; outline: none; }
+  input:focus { border-color: #4f8f6b; }
+  button { background: #18212a; color: #cfe3d4; border: 1px solid #26323d;
+    font: inherit; padding: 10px 14px; border-radius: 8px; cursor: pointer; }
+  button:hover { border-color: #4f8f6b; }
+  #quick { display: flex; gap: 8px; padding: 8px 20px; flex-wrap: wrap;
+    border-top: 1px solid #141a20; background: #0b0e12; }
+  #quick button { font-size: 15px; padding: 7px 12px; }
+</style></head>
+<body><div id="wrap">
+  <header>
+    <h1>labo</h1>
+    <span id="who">connexion…</span>
+  </header>
+  <div id="out"></div>
+  <div id="quick"></div>
+  <div id="bar">
+    <span id="prompt">root@tv&nbsp;$</span>
+    <input id="cmd" autocomplete="off" spellcheck="false" placeholder="commande (ping, ls, ps, top…)">
+    <button id="run">Exécuter</button>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  var out = document.getElementById("out");
+  var input = document.getElementById("cmd");
+  var who = document.getElementById("who");
+  var history = [];
+  var hpos = -1;
+
+  function print(text, cls) {
+    var d = document.createElement("div");
+    if (cls) d.className = cls;
+    d.textContent = text;
+    out.appendChild(d);
+    out.scrollTop = out.scrollHeight;
+  }
+
+  function run(cmd) {
+    if (!cmd) return;
+    print("$ " + cmd, "cmd");
+    history.push(cmd);
+    hpos = history.length;
+    var x = new XMLHttpRequest();
+    x.open("POST", "/api/sh", true);
+    x.setRequestHeader("Content-Type", "application/json");
+    x.onload = function () {
+      var t = "";
+      try { t = JSON.parse(x.responseText).out || ""; } catch (e) { t = x.responseText; }
+      if (t.length) print(t.replace(/\s+$/, ""));
+      else print("(aucune sortie)");
+      who.textContent = "connecté";
+    };
+    x.onerror = function () { print("le shell ne répond pas", "err"); };
+    x.send(JSON.stringify({ cmd: cmd }));
+  }
+
+  document.getElementById("run").addEventListener("click", function () {
+    run(input.value); input.value = "";
+  });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { run(input.value); input.value = ""; }
+    else if (e.key === "ArrowUp") { if (hpos > 0) { hpos--; input.value = history[hpos] || ""; } e.preventDefault(); }
+    else if (e.key === "ArrowDown") { if (hpos < history.length - 1) { hpos++; input.value = history[hpos] || ""; } else { hpos = history.length; input.value = ""; } e.preventDefault(); }
+  });
+
+  var quick = [
+    ["qui suis-je", "id; /APPS/.probe/busybox.static uname -a"],
+    ["espace disque", "/APPS/.probe/busybox.static df -h"],
+    ["processus", "/APPS/.probe/busybox.static ps | /APPS/.probe/busybox.static head -20"],
+    ["réseau", "/APPS/.probe/busybox.static ping -c 3 192.168.50.1"],
+    ["températures", "cat /proc/tv/temperature 2>/dev/null || /APPS/.probe/busybox.static ls /sys/class/thermal"],
+    ["journaux", "/APPS/.probe/busybox.static tail -20 /APPS/.probe/boot.log"],
+    ["effacer", ""]
+  ];
+  var q = document.getElementById("quick");
+  quick.forEach(function (item) {
+    var b = document.createElement("button");
+    b.textContent = item[0];
+    b.addEventListener("click", function () {
+      if (!item[1]) { out.innerHTML = ""; return; }
+      print("$ " + item[1], "cmd");
+      var x = new XMLHttpRequest();
+      x.open("POST", "/api/sh", true);
+      x.setRequestHeader("Content-Type", "application/json");
+      x.onload = function () { print(x.responseText); };
+      x.send(JSON.stringify({ cmd: item[1] }));
+    });
+    q.appendChild(b);
+  });
+
+  print("labo alvidaa — shell root sur la télé");
+  print("Astuce : flèches haut/bas pour l'historique. Tout passe par le port 2324.");
+  run("id; /APPS/.probe/busybox.static uname -a");
+  input.focus();
+})();
+</script>
+</body></html>

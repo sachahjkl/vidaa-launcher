@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Range les formes</title>
+<!--
+  Range les formes - jeu de tri pour la telecommande.
+  Une forme souriante flotte au-dessus d'un des 3 paniers. Gauche/droite la deplacent d'un panier
+  a l'autre, OK la lache. Manche 1 : on trie par couleur (panier rouge, bleu, jaune).
+  Manche 2 : on trie par forme (rond, carre, triangle). 6 formes par manche, 12 cases en haut.
+
+  Aucune penalite : une forme lachee dans le mauvais panier rebondit gentiment dans la main,
+  et le bon panier se met a briller. A la fin : confettis et BRAVO.
+
+  Entrees acceptees (aucun glisser-deposer necessaire) :
+    - fleches (keydown) : gauche/droite choisissent le panier, OK/Entree lache la forme ;
+    - pointeur (le pave directionnel deplace un pointeur, OK = clic) : la forme suit le panier
+      sous le pointeur, le clic la lache.
+  Retour (ou la maison) ramene a l'accueil. M ou le haut-parleur coupe le son.
+  Fichier autonome : pas de dependance, pas d'image, sons synthetises avec WebAudio.
+  Note : aucun caractere accentue dans les textes affiches (police de secours de la tele).
+-->
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+    background: #12304a; color: #fff;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+    font-family: "Trebuchet MS", "Arial Rounded MT Bold", Verdana, Arial, sans-serif;
+  }
+  #stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden; }
+  #cv { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; display: block; }
+
+  .screen {
+    position: absolute; left: 0; top: 0; width: 1920px; height: 1080px;
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    box-sizing: border-box;
+  }
+  .screen.on { display: flex; }
+  #start { background: rgba(14, 40, 64, 0.7); }
+  #win { background: rgba(14, 40, 64, 0.40); padding-bottom: 260px; }
+  h1 {
+    font-size: 130px; margin: 0 0 30px; color: #ffe14d; letter-spacing: 2px;
+    text-shadow: 0 8px 0 #1f5f8a, 0 0 40px rgba(255, 220, 80, 0.6);
+  }
+  .hint { display: flex; align-items: center; gap: 40px; margin-bottom: 60px; }
+  .row { display: flex; align-items: center; gap: 70px; }
+
+  /* Gros boutons. Pas de <button> : aucune activation clavier native, on gere tout nous-memes. */
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 30px;
+    min-width: 520px; height: 200px; padding: 0 70px; box-sizing: border-box;
+    border-radius: 100px; background: #ff5a8a; color: #fff;
+    font-size: 100px; font-weight: bold; cursor: pointer;
+    box-shadow: 0 16px 0 #b8325d, 0 24px 40px rgba(0, 0, 0, 0.4);
+  }
+  .btn.green { background: #3ccf6e; box-shadow: 0 16px 0 #23894a, 0 24px 40px rgba(0, 0, 0, 0.4); }
+  .btn.blue { background: #4aa8ff; box-shadow: 0 16px 0 #2a6cb0, 0 24px 40px rgba(0, 0, 0, 0.4); min-width: 240px; padding: 0 50px; }
+  .btn.sel { outline: 14px solid #fff; outline-offset: 10px; animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { transform: scale(1.08); } 50% { transform: scale(1.16); } }
+
+  .corner {
+    position: absolute; top: 28px; width: 130px; height: 130px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.18); display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  #home { left: 28px; display: none; }
+  #home.on { display: flex; }
+  #mute { right: 28px; }
+  #mute .off { display: none; }
+  #mute.muted { background: rgba(255, 80, 80, 0.45); }
+  #mute.muted .on { display: none; }
+  #mute.muted .off { display: block; }
+
+  .bravo { font-size: 200px; }
+  .bravo span { display: inline-block; animation: hop 0.9s ease-in-out infinite; }
+  .bravo span:nth-child(2) { animation-delay: 0.1s; }
+  .bravo span:nth-child(3) { animation-delay: 0.2s; }
+  .bravo span:nth-child(4) { animation-delay: 0.3s; }
+  .bravo span:nth-child(5) { animation-delay: 0.4s; }
+  .bravo span:nth-child(7) { animation-delay: 0.5s; }
+  @keyframes hop { 0%, 100% { transform: translateY(0); } 40% { transform: translateY(-50px) rotate(-6deg); } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv" width="1920" height="1080"></canvas>
+
+  <!-- Accueil : un rond rouge -> fleche -> panier rouge, puis JOUER -->
+  <div id="start" class="screen on">
+    <h1>Range les formes !</h1>
+    <div class="hint">
+      <svg width="170" height="170" viewBox="0 0 100 100"><circle cx="50" cy="50" r="42" fill="#ff5a6a" stroke="#fff" stroke-width="5"/><circle cx="38" cy="44" r="5" fill="#2b2340"/><circle cx="62" cy="44" r="5" fill="#2b2340"/><path d="M38 60 Q50 70 62 60" stroke="#2b2340" stroke-width="5" fill="none" stroke-linecap="round"/></svg>
+      <svg width="150" height="120" viewBox="0 0 130 100"><path d="M10 50 L100 50 M70 18 L110 50 L70 82" stroke="#ffe14d" stroke-width="16" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg width="220" height="170" viewBox="0 0 130 100"><rect x="5" y="14" width="120" height="18" rx="9" fill="#ff9aa5"/><path d="M12 30 L118 30 L104 96 L26 96 Z" fill="#ff5a6a"/><path d="M18 52 L112 52 M22 74 L108 74" stroke="#b8323f" stroke-width="6"/></svg>
+    </div>
+    <div class="btn" data-action="play">
+      <svg width="100" height="100" viewBox="0 0 100 100"><path d="M25 12 L88 50 L25 88 Z" fill="#fff"/></svg>
+      JOUER
+    </div>
+  </div>
+
+  <div id="win" class="screen">
+    <h1 class="bravo"><span>B</span><span>R</span><span>A</span><span>V</span><span>O</span> <span>!</span></h1>
+    <div class="row">
+      <div class="btn green" data-action="again">
+        <svg width="110" height="110" viewBox="0 0 100 100"><path d="M50 16 A34 34 0 1 1 16 50" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round"/><path d="M0 54 L32 54 L16 28 Z" fill="#fff"/></svg>
+        REJOUER
+      </div>
+      <div class="btn blue" data-action="home">
+        <svg width="120" height="120" viewBox="0 0 100 100"><path d="M50 10 L94 50 L80 50 L80 90 L60 90 L60 66 L40 66 L40 90 L20 90 L20 50 L6 50 Z" fill="#fff"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <div id="home" class="corner">
+    <svg width="80" height="80" viewBox="0 0 100 100"><path d="M50 10 L94 50 L80 50 L80 90 L60 90 L60 66 L40 66 L40 90 L20 90 L20 50 L6 50 Z" fill="#fff"/></svg>
+  </div>
+  <div id="mute" class="corner">
+    <svg class="on" width="84" height="84" viewBox="0 0 100 100"><path d="M8 36 L28 36 L52 14 L52 86 L28 64 L8 64 Z" fill="#fff"/><path d="M64 34 Q74 50 64 66 M74 22 Q92 50 74 78" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round"/></svg>
+    <svg class="off" width="84" height="84" viewBox="0 0 100 100"><path d="M8 36 L28 36 L52 14 L52 86 L28 64 L8 64 Z" fill="#fff"/><path d="M64 36 L92 64 M92 36 L64 64" stroke="#fff" stroke-width="10" stroke-linecap="round"/></svg>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ================================================================
+     Constantes du jeu
+     ================================================================ */
+  var W = 1920, H = 1080;
+  var STEP = 1 / 60;
+  var NB = 3;                                // paniers
+  var BX = [480, 960, 1440];                 // centre des paniers
+  var B_TOP = 720, B_H = 290, B_WT = 420, B_WB = 320;   // geometrie d'un panier
+  var HOLD_Y = 430;                          // hauteur de la forme tenue
+  var ITEM_R = 78;                           // rayon d'une forme
+  var PER_ROUND = 6, ROUNDS = 2, GOAL = PER_ROUND * ROUNDS;
+  var GRAV = 3200;
+  var IDLE_HINT = 8;                         // secondes sans rien faire avant que le bon panier brille
+  var SLOT_Y = 95;
+
+  // Couleurs : les 3 premieres sont celles des paniers de la manche 1
+  var PAL = ['#ff5a6a', '#4aa8ff', '#ffd93b', '#3ccf6e', '#b18cff', '#ffa94d'];
+  var PAL_DARK = ['#b8323f', '#2a6cb0', '#c9a400', '#23894a', '#7a55c9', '#c46f12'];
+  var PAL_LIGHT = ['#ff9aa5', '#a8d8ff', '#fff0a0', '#8dffb0', '#d6c2ff', '#ffd09a'];
+  var CONF_COLS = ['#ffd93b', '#ff7eb6', '#5ee0ff', '#8dff6a', '#ffa94d', '#b18cff', '#ffffff'];
+  var INK = '#2b2340';
+  var FONT_BIG = 'bold 150px "Trebuchet MS", Verdana, Arial, sans-serif';
+  var BANNERS = ['Les couleurs !', 'Les formes !', 'Super !'];
+
+  /* ================================================================
+     Outils
+     ================================================================ */
+  function $(id) { return document.getElementById(id); }
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function randInt(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+  function now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
+  function makeCanvas(w, h) { var c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+  function slotX(i) { return W / 2 + (i - (GOAL - 1) / 2) * 108 + (i < PER_ROUND ? -24 : 24); }
+
+  /* ================================================================
+     Mise a l'echelle
+     ================================================================ */
+  var stage = $('stage'), cv = $('cv');
+  var ctx = cv.getContext('2d', { alpha: false });
+  var scale = 1, offX = 0, offY = 0;
+  function fit() {
+    var iw = window.innerWidth || W, ih = window.innerHeight || H;
+    scale = Math.min(iw / W, ih / H);
+    offX = (iw - W * scale) / 2;
+    offY = (ih - H * scale) / 2;
+    stage.style.transform = 'translate(' + offX + 'px,' + offY + 'px) scale(' + scale + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+
+  /* ================================================================
+     Son (WebAudio)
+     ================================================================ */
+  var AC = null, master = null, muted = false;
+  try { muted = window.localStorage.getItem('formes-muet') === '1'; } catch (e) { /* rien */ }
+  function initAudio() {
+    if (AC) {
+      if (AC.state === 'suspended' && !document.hidden) { try { AC.resume(); } catch (e) { /* rien */ } }
+      return;
+    }
+    try {
+      var C = window.AudioContext || window.webkitAudioContext;
+      if (!C) return;
+      AC = new C();
+      master = AC.createGain();
+      master.gain.value = muted ? 0 : 0.5;
+      master.connect(AC.destination);
+    } catch (e) { AC = null; }
+  }
+  function tone(freq, dur, type, vol, delay, slideTo) {
+    if (!AC || muted || AC.state !== 'running') return;
+    try {
+      var t = AC.currentTime + (delay || 0);
+      var o = AC.createOscillator(), g = AC.createGain();
+      o.type = type || 'sine';
+      o.frequency.setValueAtTime(freq, t);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol || 0.2, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(master);
+      o.start(t); o.stop(t + dur + 0.05);
+    } catch (e) { /* rien */ }
+  }
+  var NOTES = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.51, 1567.98, 1760, 2093, 2349.32];
+  function sfxMove() { tone(620, 0.07, 'sine', 0.12); }
+  function sfxDrop() { tone(900, 0.25, 'sine', 0.12, 0, 300); }
+  function sfxYes(i) { var f = NOTES[clamp(i, 0, NOTES.length - 1)]; tone(f, 0.25, 'triangle', 0.3); tone(f * 1.5, 0.3, 'triangle', 0.18, 0.1); }
+  function sfxBoing() { tone(180, 0.35, 'sine', 0.25, 0, 520); tone(392, 0.15, 'sine', 0.1, 0.3); tone(330, 0.22, 'sine', 0.1, 0.44); }
+  function sfxSlot() { tone(1600, 0.09, 'sine', 0.08, 0, 2400); }
+  function sfxEnter() { tone(400, 0.2, 'sine', 0.12, 0, 800); }
+  function sfxSelect() { tone(880, 0.06, 'sine', 0.12); }
+  function sfxConfirm() { tone(660, 0.1, 'triangle', 0.25); tone(990, 0.18, 'triangle', 0.25, 0.09); }
+  function sfxSwap() { for (var i = 0; i < 5; i++) tone(500 + i * 160, 0.1, 'sine', 0.1, i * 0.06); }
+  function sfxWin() {
+    var seq = [523.25, 659.25, 783.99, 1046.5, 783.99, 1046.5];
+    for (var i = 0; i < seq.length; i++) tone(seq[i], 0.3, 'triangle', 0.28, i * 0.13);
+    tone(1318.51, 0.7, 'triangle', 0.25, 0.8);
+    tone(659.25, 0.7, 'sine', 0.15, 0.8);
+  }
+  var muteBtn = $('mute');
+  function paintMute() { muteBtn.classList.toggle('muted', muted); }
+  function toggleMute() {
+    muted = !muted;
+    if (master) master.gain.value = muted ? 0 : 0.5;
+    try { window.localStorage.setItem('formes-muet', muted ? '1' : '0'); } catch (e) { /* rien */ }
+    paintMute();
+    if (!muted) sfxSelect();
+  }
+  paintMute();
+
+  /* ================================================================
+     Dessin d'une forme : 0 rond, 1 carre, 2 triangle, 3 etoile.
+     mood : -1 sans visage, 0 sourire, 1 surprise "o"
+     ================================================================ */
+  function shapePath(g, kind, x, y, r) {
+    var i, a;
+    g.beginPath();
+    if (kind === 0) {
+      g.arc(x, y, r, 0, Math.PI * 2);
+    } else if (kind === 1) {
+      var s = r * 0.88, c = r * 0.25;
+      g.moveTo(x - s + c, y - s); g.lineTo(x + s - c, y - s); g.quadraticCurveTo(x + s, y - s, x + s, y - s + c);
+      g.lineTo(x + s, y + s - c); g.quadraticCurveTo(x + s, y + s, x + s - c, y + s);
+      g.lineTo(x - s + c, y + s); g.quadraticCurveTo(x - s, y + s, x - s, y + s - c);
+      g.lineTo(x - s, y - s + c); g.quadraticCurveTo(x - s, y - s, x - s + c, y - s);
+    } else if (kind === 2) {
+      g.moveTo(x, y - r * 1.05); g.lineTo(x + r * 1.08, y + r * 0.8); g.lineTo(x - r * 1.08, y + r * 0.8);
+    } else {
+      for (i = 0; i < 10; i++) {
+        a = i * Math.PI / 5 - Math.PI / 2;
+        var rr = (i & 1) ? r * 0.55 : r * 1.12;
+        if (i === 0) g.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+        else g.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+      }
+    }
+    g.closePath();
+  }
+  function drawShape(g, kind, x, y, r, col, mood, outline) {
+    g.lineJoin = 'round'; g.lineCap = 'round';
+    shapePath(g, kind, x, y, r);
+    g.fillStyle = col; g.fill();
+    if (kind === 2) { g.strokeStyle = col; g.lineWidth = r * 0.22; g.stroke(); }   // coins du triangle arrondis
+    if (outline) { g.strokeStyle = outline; g.lineWidth = Math.max(4, r * 0.08); g.stroke(); }
+    if (mood < 0) return;
+    var ey = y + (kind === 2 ? r * 0.12 : -r * 0.08), ex = r * 0.3, er = r * 0.11;
+    g.fillStyle = INK;
+    g.beginPath(); g.arc(x - ex, ey, er, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(x + ex, ey, er, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#fff';
+    g.beginPath(); g.arc(x - ex + er * 0.35, ey - er * 0.35, er * 0.4, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(x + ex + er * 0.35, ey - er * 0.35, er * 0.4, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = INK; g.lineWidth = Math.max(3, r * 0.07);
+    if (mood === 1) {
+      g.fillStyle = INK;
+      g.beginPath(); g.arc(x, ey + r * 0.32, r * 0.11, 0, Math.PI * 2); g.fill();
+    } else {
+      g.beginPath(); g.arc(x, ey + r * 0.1, r * 0.25, 0.2 * Math.PI, 0.8 * Math.PI); g.stroke();
+    }
+  }
+
+  /* ================================================================
+     Images pre-rendues : decor, faces avant des paniers
+     ================================================================ */
+  var bgImg = makeCanvas(W, H);
+  (function drawBg() {
+    var g = bgImg.getContext('2d'), i;
+    var grd = g.createLinearGradient(0, 0, 0, H);
+    grd.addColorStop(0, '#5ec3f2'); grd.addColorStop(0.6, '#a9e4ff'); grd.addColorStop(1, '#c8f0ff');
+    g.fillStyle = grd; g.fillRect(0, 0, W, H);
+    // nuages
+    g.fillStyle = 'rgba(255,255,255,0.8)';
+    var clouds = [[300, 300], [1600, 260], [980, 560], [180, 600], [1750, 620]];
+    for (i = 0; i < clouds.length; i++) {
+      var cx = clouds[i][0], cy = clouds[i][1];
+      g.beginPath(); g.arc(cx, cy, 50, 0, Math.PI * 2); g.arc(cx + 55, cy - 20, 62, 0, Math.PI * 2);
+      g.arc(cx + 115, cy, 48, 0, Math.PI * 2); g.fill();
+    }
+    // herbe
+    g.fillStyle = '#5fcf5a'; g.fillRect(0, 900, W, H - 900);
+    g.fillStyle = '#4bb846';
+    for (i = 0; i < 60; i++) { g.beginPath(); g.arc(i * 34, 900, 26, Math.PI, 0); g.fill(); }
+    // bandeau de l'objectif
+    g.fillStyle = 'rgba(255,255,255,0.35)';
+    g.beginPath(); g.ellipse(W / 2, SLOT_Y, 720, 66, 0, 0, Math.PI * 2); g.fill();
+    for (i = 0; i < GOAL; i++) {
+      g.fillStyle = 'rgba(30,60,100,0.25)';
+      g.beginPath(); g.arc(slotX(i), SLOT_Y, 44, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = 'rgba(255,255,255,0.8)'; g.lineWidth = 5; g.setLineDash([10, 8]);
+      g.beginPath(); g.arc(slotX(i), SLOT_Y, 44, 0, Math.PI * 2); g.stroke();
+    }
+    g.setLineDash([]);
+  })();
+
+  // Face avant d'un panier : mode 0 = couleur (panier colore), mode 1 = forme (osier + etiquette)
+  var BSW = 460, BSH = 340, BOX = 230, BOY = 20;      // taille du sprite, origine (centre du bord haut)
+  var basketImgs = [[], []];
+  function makeBasket(mode, b) {
+    var c = makeCanvas(BSW, BSH), g = c.getContext('2d');
+    var body = mode === 0 ? PAL[b] : '#d39a5c', dark = mode === 0 ? PAL_DARK[b] : '#9b6b3a', light = mode === 0 ? PAL_LIGHT[b] : '#f0c58e';
+    var x0 = BOX, y0 = BOY + 20, i;
+    g.fillStyle = body;
+    g.beginPath();
+    g.moveTo(x0 - B_WT / 2, y0); g.lineTo(x0 + B_WT / 2, y0);
+    g.lineTo(x0 + B_WB / 2, y0 + B_H - 30); g.quadraticCurveTo(x0 + B_WB / 2, y0 + B_H, x0 + B_WB / 2 - 30, y0 + B_H);
+    g.lineTo(x0 - B_WB / 2 + 30, y0 + B_H); g.quadraticCurveTo(x0 - B_WB / 2, y0 + B_H, x0 - B_WB / 2, y0 + B_H - 30);
+    g.closePath(); g.fill();
+    // tressage
+    g.save(); g.clip();
+    g.strokeStyle = dark; g.lineWidth = 8;
+    for (i = 1; i < 6; i++) { g.beginPath(); g.moveTo(0, y0 + i * 48); g.lineTo(BSW, y0 + i * 48); g.stroke(); }
+    g.globalAlpha = 0.35;
+    for (i = 0; i < 12; i++) { g.beginPath(); g.moveTo(i * 44, y0); g.lineTo(i * 44 + 20, y0 + B_H); g.stroke(); }
+    g.restore();
+    // rebord
+    g.fillStyle = light;
+    g.beginPath(); g.ellipse(x0, y0, B_WT / 2 + 18, 30, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = dark; g.lineWidth = 6;
+    g.beginPath(); g.ellipse(x0, y0, B_WT / 2 + 18, 30, 0, 0, Math.PI); g.stroke();
+    // etiquette : un grand rond blanc avec la forme a ranger
+    if (mode === 1) {
+      g.fillStyle = '#fff';
+      g.beginPath(); g.arc(x0, y0 + 145, 88, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = dark; g.lineWidth = 8; g.stroke();
+      drawShape(g, b, x0, y0 + 148, 52, '#5a4a7a', -1, null);
+    }
+    return c;
+  }
+  for (var b0 = 0; b0 < NB; b0++) { basketImgs[0].push(makeBasket(0, b0)); basketImgs[1].push(makeBasket(1, b0)); }
+
+  /* ================================================================
+     Pools et etat
+     ================================================================ */
+  var PMAX = 400, parts = [], pNext = 0;
+  for (var i1 = 0; i1 < PMAX; i1++) parts.push({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, col: '#fff', size: 10, kind: 0, rot: 0, vr: 0, g: 0 });
+  function emit(x, y, vx, vy, life, col, size, kind, grav) {
+    var p = parts[pNext]; pNext = (pNext + 1) % PMAX;
+    p.on = true; p.x = x; p.y = y; p.vx = vx; p.vy = vy; p.life = life; p.max = life;
+    p.col = col; p.size = size; p.kind = kind; p.g = grav;
+    p.rot = Math.random() * 6.28; p.vr = (Math.random() - 0.5) * 10;
+  }
+  function burst(x, y, n, col) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2, sp = 200 + Math.random() * 500;
+      emit(x, y, Math.cos(a) * sp, Math.sin(a) * sp - 250, 0.6 + Math.random() * 0.4,
+        (col && (i & 1)) ? col : CONF_COLS[i % CONF_COLS.length], 8 + Math.random() * 12, 0, 900);
+    }
+  }
+  function confetti(n) {
+    for (var i = 0; i < n; i++) {
+      emit(Math.random() * W, -20 - Math.random() * 200, (Math.random() - 0.5) * 200, 150 + Math.random() * 250,
+        4 + Math.random() * 2, CONF_COLS[randInt(0, CONF_COLS.length - 1)], 16 + Math.random() * 14, 1, 120);
+    }
+  }
+
+  // Petites copies qui volent du panier vers leur case en haut
+  var FLY_MAX = 4, flyers = [];
+  for (var i2 = 0; i2 < FLY_MAX; i2++) flyers.push({ on: false, t: 0, dur: 0.7, x0: 0, y0: 0, slot: 0 });
+
+  var state = 'start';           // 'start' | 'play' | 'celebrate' | 'win'
+  var phase = '';                // pendant 'play' : 'intro' | 'go' | 'roundEnd' | 'swap'
+  var phaseT = 0, banner = -1, bannerT = 0;
+  var round = 0, placed = 0, inRound = 0;
+  var sel = 1;                   // panier vise
+  var qBasket = new Int8Array(PER_ROUND), qKind = new Int8Array(PER_ROUND), qCol = new Int8Array(PER_ROUND);
+  // La forme en jeu (un seul objet, reutilise)
+  var it = { phase: 'none', x: BX[1], y: -200, vy: 0, t: 0, kind: 0, col: 0, target: 0, dropB: 0, mood: 0, moodT: 0 };
+  var nextT = 0, idleT = 0, hintB = -1;
+  // Contenu des paniers (manche en cours) : 3 places par panier
+  var bCount = new Uint8Array(NB), bKind = new Int8Array(NB * 3), bCol = new Int8Array(NB * 3);
+  var bJoy = new Float32Array(NB), bShake = new Float32Array(NB);
+  var slotOn = new Uint8Array(GOAL), slotKind = new Int8Array(GOAL), slotCol = new Int8Array(GOAL), slotPop = new Float32Array(GOAL);
+  var basketMode = 0, flipK = 1;
+  var T = 0, celebT = 0, celebFired = false, confT = 0;
+  var actLock = 0, lastOkKey = 0, keyboardUntil = 0, lastKeyMove = 0;
+
+  function buildRound() {
+    var i;
+    for (i = 0; i < PER_ROUND; i++) qBasket[i] = i % NB;
+    for (i = PER_ROUND - 1; i > 0; i--) { var j = randInt(0, i), t = qBasket[i]; qBasket[i] = qBasket[j]; qBasket[j] = t; }
+    for (i = 0; i < PER_ROUND; i++) {
+      if (round === 0) { qKind[i] = randInt(0, 3); qCol[i] = qBasket[i]; }       // tri par couleur
+      else { qKind[i] = qBasket[i]; qCol[i] = randInt(0, PAL.length - 1); }      // tri par forme
+    }
+    for (i = 0; i < NB; i++) bCount[i] = 0;
+    inRound = 0;
+    basketMode = round;
+  }
+  function startGame() {
+    var i;
+    for (i = 0; i < GOAL; i++) { slotOn[i] = 0; slotPop[i] = 0; }
+    for (i = 0; i < FLY_MAX; i++) flyers[i].on = false;
+    for (i = 0; i < NB; i++) { bJoy[i] = 0; bShake[i] = 0; }
+    round = 0; placed = 0; sel = 1; hintB = -1; flipK = 1;
+    it.phase = 'none';
+    buildRound();
+    state = 'play';
+    phase = 'intro'; phaseT = 1.6; banner = 0; bannerT = 0;
+    showScreen(null);
+  }
+  function goHome() {
+    state = 'start'; phase = ''; banner = -1;
+    it.phase = 'none';
+    showScreen('start');
+    actLock = now() + 400;
+  }
+  function showWin() {
+    state = 'win';
+    showScreen('win');
+    actLock = now() + 900;
+  }
+
+  // Une nouvelle forme descend du ciel au-dessus du panier vise
+  function spawnItem() {
+    it.phase = 'enter'; it.t = 0;
+    it.kind = qKind[inRound]; it.col = qCol[inRound]; it.target = qBasket[inRound];
+    it.x = BX[sel]; it.y = -150; it.vy = 0; it.mood = 0; it.moodT = 0;
+    idleT = 0;
+    // premiere forme de chaque manche : le bon panier brille tout de suite, pour montrer la regle
+    hintB = inRound === 0 ? it.target : -1;
+    sfxEnter();
+  }
+
+  function moveSel(d, isRepeat) {
+    var t = now();
+    keyboardUntil = t + 1200;
+    if (isRepeat && t - lastKeyMove < 180) return;
+    lastKeyMove = t;
+    var n = clamp(sel + d, 0, NB - 1);
+    if (n !== sel) { sel = n; sfxMove(); idleT = 0; }
+  }
+  function setSelFromX(x) {
+    if (now() < keyboardUntil) return;
+    var n = x < (BX[0] + BX[1]) / 2 ? 0 : (x < (BX[1] + BX[2]) / 2 ? 1 : 2);
+    if (n !== sel) { sel = n; sfxMove(); idleT = 0; }
+  }
+  // OK : on lache la forme dans le panier vise
+  function drop() {
+    if (state !== 'play' || it.phase !== 'hold') return;
+    it.phase = 'drop'; it.dropB = sel; it.vy = 300;
+    sfxDrop();
+  }
+
+  // La forme arrive dans le panier : bon panier ou petit rebond
+  function judge() {
+    var b = it.dropB;
+    if (b === it.target) {
+      var k = bCount[b]; if (k > 2) k = 2;
+      bKind[b * 3 + k] = it.kind; bCol[b * 3 + k] = it.col; bCount[b] = k + 1;
+      bJoy[b] = 1;
+      burst(BX[b], B_TOP, 30, PAL[it.col]);
+      sfxYes(placed);
+      launchFlyer(BX[b], B_TOP - 30, placed, it.kind, it.col);
+      placed++; inRound++;
+      it.phase = 'none'; hintB = -1;
+      if (inRound >= PER_ROUND) {
+        if (round + 1 >= ROUNDS) { state = 'celebrate'; celebT = 3.2; celebFired = false; }
+        else { phase = 'roundEnd'; phaseT = 1.8; banner = 2; bannerT = 0; }
+      } else {
+        nextT = 0.45;
+      }
+    } else {
+      it.phase = 'bounce'; it.vy = -1500; it.mood = 1; it.moodT = 1.0;
+      bShake[b] = 1;
+      hintB = it.target;                        // le bon panier va briller
+      sfxBoing();
+    }
+  }
+  function launchFlyer(x, y, slot, kind, col) {
+    slotKind[slot] = kind; slotCol[slot] = col;
+    for (var i = 0; i < FLY_MAX; i++) {
+      var f = flyers[i];
+      if (f.on) continue;
+      f.on = true; f.t = 0; f.x0 = x; f.y0 = y; f.slot = slot;
+      return;
+    }
+    slotOn[slot] = 1; slotPop[slot] = 1;
+  }
+  function ease(k) { return k < 0.5 ? 2 * k * k : 1 - 2 * (1 - k) * (1 - k); }
+  function flyX(f, k) { return f.x0 + (slotX(f.slot) - f.x0) * ease(k); }
+  function flyY(f, k) { return f.y0 + (SLOT_Y - f.y0) * ease(k) - Math.sin(k * Math.PI) * 160; }
+
+  /* ================================================================
+     Mise a jour (pas fixe)
+     ================================================================ */
+  function update(dt) {
+    T += dt;
+    var i;
+    if (state === 'play') {
+      bannerT += dt;
+      if (phaseT > 0) {
+        phaseT -= dt;
+        if (phaseT <= 0) {
+          phaseT = 0;
+          if (phase === 'intro') { phase = 'go'; banner = -1; spawnItem(); }
+          else if (phase === 'roundEnd') { phase = 'swap'; phaseT = 0.8; banner = -1; sfxSwap(); round++; }
+          else if (phase === 'swap') { phase = 'intro'; phaseT = 1.6; banner = 1; bannerT = 0; flipK = 1; }
+        }
+      }
+      // les paniers se retournent : on change d'image a mi-chemin
+      if (phase === 'swap') {
+        var k = 1 - phaseT / 0.8;
+        flipK = Math.abs(Math.cos(k * Math.PI));
+        if (k >= 0.5 && basketMode !== round) buildRound();
+      }
+      if (phase === 'go' && it.phase === 'none' && inRound < PER_ROUND) {
+        nextT -= dt;
+        if (nextT <= 0) spawnItem();
+      }
+    }
+    // la forme
+    if (it.phase === 'enter') {
+      it.t += dt;
+      var e = clamp(it.t / 0.55, 0, 1);
+      it.x += (BX[sel] - it.x) * Math.min(1, dt * 12);
+      it.y = -150 + (HOLD_Y + 150) * (1 - (1 - e) * (1 - e));
+      if (e >= 1) it.phase = 'hold';
+    } else if (it.phase === 'hold') {
+      it.x += (BX[sel] - it.x) * Math.min(1, dt * 12);
+      it.y = HOLD_Y + Math.sin(T * 3) * 10;
+      idleT += dt;
+      if (idleT > IDLE_HINT && hintB < 0) hintB = it.target;
+    } else if (it.phase === 'drop') {
+      it.x += (BX[it.dropB] - it.x) * Math.min(1, dt * 20);
+      it.vy += GRAV * dt; it.y += it.vy * dt;
+      if (it.y >= B_TOP + 30) { it.y = B_TOP + 30; judge(); }
+    } else if (it.phase === 'bounce') {
+      it.x += (BX[sel] - it.x) * Math.min(1, dt * 6);
+      it.vy += GRAV * dt; it.y += it.vy * dt;
+      if (it.vy > 0 && it.y >= HOLD_Y) { it.y = HOLD_Y; it.phase = 'hold'; idleT = 0; }
+    }
+    if (it.moodT > 0) { it.moodT -= dt; if (it.moodT <= 0) it.mood = 0; }
+
+    if (state === 'celebrate') {
+      celebT -= dt;
+      if (!celebFired && celebT < 2.4) { celebFired = true; confetti(100); sfxWin(); }
+      for (i = 0; i < NB; i++) if (bJoy[i] <= 0 && Math.random() < 0.05) bJoy[i] = 1;
+      if (celebT <= 0) { showWin(); confT = 0; }
+    }
+    if (state === 'win') {
+      confT -= dt;
+      if (confT <= 0) { confetti(25); confT = 1.2; }
+    }
+    for (i = 0; i < NB; i++) { bJoy[i] = Math.max(0, bJoy[i] - dt * 2); bShake[i] = Math.max(0, bShake[i] - dt * 2); }
+    for (i = 0; i < GOAL; i++) if (slotPop[i] > 0) slotPop[i] = Math.max(0, slotPop[i] - dt * 3);
+    for (i = 0; i < FLY_MAX; i++) {
+      var f = flyers[i];
+      if (!f.on) continue;
+      f.t += dt;
+      if (f.t >= f.dur) {
+        f.on = false; slotOn[f.slot] = 1; slotPop[f.slot] = 1;
+        sfxSlot(); burst(slotX(f.slot), SLOT_Y, 14);
+      }
+    }
+    for (i = 0; i < PMAX; i++) {
+      var p = parts[i];
+      if (!p.on) continue;
+      p.life -= dt;
+      if (p.life <= 0) { p.on = false; continue; }
+      p.vy += p.g * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+      if (p.kind === 1) p.x += Math.sin(T * 3 + p.rot) * 40 * dt;
+    }
+  }
+
+  /* ================================================================
+     Rendu
+     ================================================================ */
+  var CONTENT_DX = [-90, 90, 0];
+  function drawBasket(b) {
+    var x = BX[b] + Math.sin(bShake[b] * 28) * bShake[b] * 22;
+    var j = Math.sin(bJoy[b] * Math.PI);
+    var sx = flipK * (1 + j * 0.06), sy = 1 - j * 0.08;
+    ctx.save();
+    ctx.translate(x, B_TOP + B_H);                 // pivot en bas : le panier s'ecrase sur l'herbe
+    ctx.scale(sx, sy);
+    ctx.translate(0, -B_H);
+    // ombre et interieur sombre
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.beginPath(); ctx.ellipse(0, B_H + 8, B_WB / 2 + 30, 20, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = basketMode === 0 ? PAL_DARK[b] : '#7a4a26';
+    ctx.beginPath(); ctx.ellipse(0, 20, B_WT / 2 + 4, 26, 0, 0, Math.PI * 2); ctx.fill();
+    // formes deja rangees, qui depassent du panier
+    for (var k = 0; k < bCount[b]; k++) {
+      drawShape(ctx, bKind[b * 3 + k], CONTENT_DX[k], -14 + (k === 2 ? -30 : 0), 56, PAL[bCol[b * 3 + k]], 0, '#fff');
+    }
+    // la forme qui tombe passe derriere le devant du panier
+    if (it.phase === 'drop' && it.dropB === b && it.y > B_TOP - 70) {
+      drawShape(ctx, it.kind, (it.x - x) / sx, (it.y - B_TOP) / sy, ITEM_R, PAL[it.col], it.mood, '#fff');
+    }
+    ctx.drawImage(basketImgs[basketMode][b], -BOX, -BOY);
+    ctx.restore();
+  }
+
+  function render() {
+    var i;
+    ctx.drawImage(bgImg, 0, 0);
+
+    // cases de l'objectif
+    for (i = 0; i < GOAL; i++) {
+      if (!slotOn[i]) continue;
+      drawShape(ctx, slotKind[i], slotX(i), SLOT_Y, 36 * (1 + slotPop[i] * 0.4), PAL[slotCol[i]], -1, '#fff');
+    }
+
+    var playing = state === 'play' || state === 'celebrate';
+    // lueur derriere le bon panier (aide) et cadre du panier vise
+    if (playing && hintB >= 0) {
+      ctx.globalAlpha = 0.45 + Math.sin(T * 6) * 0.25;
+      ctx.fillStyle = '#ffe14d';
+      ctx.beginPath(); ctx.ellipse(BX[hintB], B_TOP + B_H / 2, B_WT / 2 + 70, B_H / 2 + 80, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    for (i = 0; i < NB; i++) drawBasket(i);
+    if (playing && hintB >= 0) {                   // une etoile qui sautille au-dessus du bon panier
+      ctx.fillStyle = '#ffe14d';
+      drawStarAt(BX[hintB] + 190, B_TOP - 40 + Math.sin(T * 7) * 12, 34);
+    }
+
+    // chemin en pointilles de la forme vers le panier vise
+    if (state === 'play' && it.phase === 'hold') {
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      var x = it.x, y0 = it.y + ITEM_R + 30, y1 = B_TOP - 50, n = 5;
+      for (i = 0; i < n; i++) {
+        var yy = y0 + (y1 - y0) * ((i + (T * 1.5) % 1) / n);
+        ctx.beginPath(); ctx.arc(x, yy, 10, 0, Math.PI * 2); ctx.fill();
+      }
+      // fleche
+      ctx.beginPath(); ctx.moveTo(x - 34, y1 - 10); ctx.lineTo(x + 34, y1 - 10); ctx.lineTo(x, y1 + 26); ctx.closePath(); ctx.fill();
+    }
+    // la forme tenue / qui arrive / qui rebondit
+    if (it.phase === 'enter' || it.phase === 'hold' || it.phase === 'bounce' || (it.phase === 'drop' && it.y <= B_TOP - 70)) {
+      var wob = it.phase === 'hold' ? Math.sin(T * 5) * 0.06 : 0;
+      ctx.save(); ctx.translate(it.x, it.y); ctx.rotate(wob);
+      drawShape(ctx, it.kind, 0, 0, ITEM_R, PAL[it.col], it.mood, '#fff');
+      ctx.restore();
+    }
+
+    // formes qui volent vers les cases
+    for (i = 0; i < FLY_MAX; i++) {
+      var f = flyers[i];
+      if (!f.on) continue;
+      var k = f.t / f.dur;
+      drawShape(ctx, slotKind[f.slot], flyX(f, k), flyY(f, k), 56 - 20 * k, PAL[slotCol[f.slot]], 0, '#fff');
+    }
+
+    // bandeau ("Les couleurs !", "Les formes !", "Super !")
+    if (state === 'play' && banner >= 0) {
+      var sc = Math.min(1, bannerT / 0.3);
+      sc = sc < 1 ? 0.3 + sc * 0.8 : 1 + Math.sin(bannerT * 5) * 0.03;
+      ctx.save(); ctx.translate(W / 2, 400); ctx.scale(sc, sc);
+      ctx.font = FONT_BIG; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#1f5f8a'; ctx.fillText(BANNERS[banner], 0, 10);
+      ctx.fillStyle = '#ffe14d'; ctx.fillText(BANNERS[banner], 0, 0);
+      ctx.restore();
+    }
+
+    // particules
+    for (i = 0; i < PMAX; i++) {
+      var p = parts[i];
+      if (!p.on) continue;
+      ctx.globalAlpha = clamp(p.life / p.max * 1.5, 0, 1);
+      ctx.fillStyle = p.col;
+      if (p.kind === 1) {
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+        ctx.restore();
+      } else {
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+  function drawStarAt(x, y, r) { shapePath(ctx, 3, x, y, r); ctx.fill(); }
+
+  /* ================================================================
+     Ecrans et selection
+     ================================================================ */
+  var screens = { start: $('start'), win: $('win') };
+  var homeCorner = $('home');
+  var curButtons = [], bsel = 0;
+  function showScreen(name) {
+    for (var k in screens) if (screens.hasOwnProperty(k)) screens[k].classList.toggle('on', k === name);
+    curButtons = name ? Array.prototype.slice.call(screens[name].querySelectorAll('.btn')) : [];
+    bsel = 0;
+    paintBtnSel();
+    homeCorner.classList.toggle('on', !name);
+  }
+  function paintBtnSel() { for (var i = 0; i < curButtons.length; i++) curButtons[i].classList.toggle('sel', i === bsel); }
+  function moveBtnSel(d) {
+    if (!curButtons.length) return;
+    var n = clamp(bsel + d, 0, curButtons.length - 1);
+    if (n !== bsel) { bsel = n; paintBtnSel(); sfxSelect(); }
+  }
+  function activate(action) {
+    var t = now();
+    if (t < actLock) return;
+    actLock = t + 500;
+    sfxConfirm();
+    if (action === 'play' || action === 'again') startGame();
+    else if (action === 'home') goHome();
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.btn'), function (el) {
+    el.addEventListener('mouseenter', function () {
+      var idx = curButtons.indexOf(el);
+      if (idx >= 0 && idx !== bsel) { bsel = idx; paintBtnSel(); }
+    });
+    el.addEventListener('click', function (e) {
+      e.stopPropagation(); initAudio();
+      if (now() - lastOkKey < 300) return;
+      activate(el.getAttribute('data-action'));
+    });
+  });
+  homeCorner.addEventListener('click', function (e) { e.stopPropagation(); if (state !== 'start') activate('home'); });
+  muteBtn.addEventListener('click', function (e) { e.stopPropagation(); initAudio(); toggleMute(); });
+  // Mode pointeur : la forme suit le panier sous le pointeur, le clic la lache
+  window.addEventListener('mousemove', function (e) {
+    if (state !== 'play') return;
+    setSelFromX((e.clientX - offX) / scale);
+  });
+  stage.addEventListener('click', function (e) {
+    initAudio();
+    if (now() - lastOkKey < 300) return;
+    if (state !== 'play') return;
+    keyboardUntil = 0;
+    setSelFromX((e.clientX - offX) / scale);
+    drop();
+  });
+
+  /* ================================================================
+     Clavier / telecommande
+     ================================================================ */
+  function keyOf(e) {
+    var k = e.key, c = e.keyCode;
+    if (k === 'ArrowLeft' || k === 'Left' || c === 37) return 'left';
+    if (k === 'ArrowRight' || k === 'Right' || c === 39) return 'right';
+    if (k === 'ArrowUp' || k === 'Up' || c === 38) return 'up';
+    if (k === 'ArrowDown' || k === 'Down' || c === 40) return 'down';
+    if (k === 'Enter' || k === ' ' || k === 'Spacebar' || k === 'Select' || c === 13 || c === 32) return 'ok';
+    if (k === 'Escape' || k === 'Backspace' || k === 'GoBack' || k === 'BrowserBack' ||
+        c === 27 || c === 8 || c === 461 || c === 10009) return 'back';
+    if (k === 'm' || k === 'M' || k === 'ColorF0Red' || c === 403) return 'mute';
+    return null;
+  }
+  window.addEventListener('keydown', function (e) {
+    initAudio();
+    var k = keyOf(e);
+    if (!k) return;
+    if (k === 'back' && state === 'start') return;   // sur l'accueil, "retour" est laisse a la tele
+    e.preventDefault();
+    if (k === 'mute') { if (!e.repeat) toggleMute(); return; }
+    if (k === 'ok') lastOkKey = now();
+    if (state === 'play') {
+      if (k === 'left') moveSel(-1, e.repeat);
+      else if (k === 'right') moveSel(1, e.repeat);
+      else if (k === 'ok') { if (!e.repeat) drop(); }   // pas "bas" : en mode pointeur il peut arriver en bougeant
+      else if (k === 'back') activate('home');
+      return;
+    }
+    if (state === 'celebrate') { if (k === 'back') activate('home'); return; }
+    if (k === 'left' || k === 'up') { if (!e.repeat) moveBtnSel(-1); }
+    else if (k === 'right' || k === 'down') { if (!e.repeat) moveBtnSel(1); }
+    else if (k === 'ok') { if (!e.repeat && curButtons[bsel]) activate(curButtons[bsel].getAttribute('data-action')); }
+    else if (k === 'back') activate('home');
+  });
+
+  window.addEventListener('mousedown', function (e) { initAudio(); e.preventDefault(); });
+  window.addEventListener('touchstart', function () { initAudio(); }, { passive: true });
+  window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  document.addEventListener('selectstart', function (e) { e.preventDefault(); });
+  window.addEventListener('wheel', function (e) { e.preventDefault(); }, { passive: false });
+
+  /* ================================================================
+     Boucle : pas fixe 1/60 s, pause quand l'onglet est cache
+     ================================================================ */
+  var acc = 0, last = 0, running = !document.hidden, resetClock = true;
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      running = false;
+      if (AC && AC.state === 'running') { try { AC.suspend(); } catch (e) { /* rien */ } }
+    } else {
+      running = true;
+      resetClock = true;
+      if (AC && AC.state === 'suspended') { try { AC.resume(); } catch (e) { /* rien */ } }
+    }
+  });
+  function frame(ts) {
+    requestAnimationFrame(frame);
+    if (!running) return;
+    if (resetClock) { last = ts; acc = 0; resetClock = false; }
+    var dt = (ts - last) / 1000;
+    last = ts;
+    if (dt < 0) dt = 0;
+    if (dt > 0.25) dt = 0.25;
+    acc += dt;
+    var n = 0;
+    while (acc >= STEP && n < 8) { update(STEP); acc -= STEP; n++; }
+    if (n === 8) acc = 0;
+    render();
+  }
+
+  showScreen('start');
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

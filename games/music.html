@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Les tambours chanteurs</title>
+<!--
+  Les tambours chanteurs - jeu de rythme pour la telecommande.
+  On choisit une chanson (Etoile, Lune, Cloche). Des bulles musicales descendent vers 4 gros
+  tambours qui ont un visage. Quand une bulle touche son tambour, on appuie sur OK : la note joue,
+  le tambour chante. C'est l'enfant qui joue la melodie.
+
+  Tres indulgent :
+    - aucune note ne peut etre ratee : si on n'appuie pas, la bulle attend sur son tambour
+      (toute la chanson attend), puis une aide "OK" apparait ;
+    - un appui un peu en avance compte aussi ; un appui bien trop tot fait juste un petit "plic".
+  La barre arc-en-ciel en haut se remplit ; a la fin, applaudissements, confettis et BRAVO.
+
+  Entrees acceptees :
+    - pointeur (le pave directionnel deplace un pointeur, OK = clic) : un clic n'importe ou = taper ;
+    - clavier : OK/Entree = taper ; fleches pour choisir dans les menus.
+  Retour (ou la maison) ramene au choix des chansons. M ou le haut-parleur coupe le son.
+  Fichier autonome : pas de dependance, pas d'image, sons synthetises avec WebAudio.
+  Les chansons sont des comptines traditionnelles du domaine public.
+  Note : aucun caractere accentue dans les textes affiches (police de secours de la tele).
+-->
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+    background: #140b30; color: #fff;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+    font-family: "Trebuchet MS", "Arial Rounded MT Bold", Verdana, Arial, sans-serif;
+  }
+  #stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden; }
+  #cv { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; display: block; }
+
+  .screen {
+    position: absolute; left: 0; top: 0; width: 1920px; height: 1080px;
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    box-sizing: border-box;
+  }
+  .screen.on { display: flex; }
+  #start { background: rgba(20, 11, 48, 0.55); }
+  #win { background: rgba(20, 11, 48, 0.40); padding-bottom: 160px; }
+  h1 {
+    font-size: 120px; margin: 0 0 20px; color: #ffe14d; letter-spacing: 2px;
+    text-shadow: 0 8px 0 #7a2a8a, 0 0 40px rgba(255, 220, 80, 0.6);
+  }
+  h2 { font-size: 64px; margin: 0 0 50px; color: #fff; text-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); }
+  .row { display: flex; align-items: center; gap: 70px; }
+
+  /* Gros boutons. Pas de <button> : aucune activation clavier native, on gere tout nous-memes. */
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 30px;
+    min-width: 520px; height: 200px; padding: 0 70px; box-sizing: border-box;
+    border-radius: 100px; background: #ff5a8a; color: #fff;
+    font-size: 100px; font-weight: bold; cursor: pointer;
+    box-shadow: 0 16px 0 #b8325d, 0 24px 40px rgba(0, 0, 0, 0.4);
+  }
+  .btn.green { background: #3ccf6e; box-shadow: 0 16px 0 #23894a, 0 24px 40px rgba(0, 0, 0, 0.4); }
+  .btn.blue { background: #4aa8ff; box-shadow: 0 16px 0 #2a6cb0, 0 24px 40px rgba(0, 0, 0, 0.4); min-width: 240px; padding: 0 50px; }
+  .btn.song { flex-direction: column; min-width: 440px; height: 360px; gap: 6px; padding: 0 40px; border-radius: 70px; font-size: 84px; }
+  .btn.song.s1 { background: #4aa8ff; box-shadow: 0 16px 0 #2a6cb0, 0 24px 40px rgba(0, 0, 0, 0.4); }
+  .btn.song.s2 { background: #ffa94d; box-shadow: 0 16px 0 #c46f12, 0 24px 40px rgba(0, 0, 0, 0.4); }
+  .btn.sel { outline: 14px solid #fff; outline-offset: 10px; animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { transform: scale(1.06); } 50% { transform: scale(1.13); } }
+
+  .corner {
+    position: absolute; top: 28px; width: 130px; height: 130px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.18); display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  #home { left: 28px; display: none; }
+  #home.on { display: flex; }
+  #mute { right: 28px; }
+  #mute .off { display: none; }
+  #mute.muted { background: rgba(255, 80, 80, 0.45); }
+  #mute.muted .on { display: none; }
+  #mute.muted .off { display: block; }
+
+  .bravo { font-size: 200px; }
+  .bravo span { display: inline-block; animation: hop 0.9s ease-in-out infinite; }
+  .bravo span:nth-child(2) { animation-delay: 0.1s; }
+  .bravo span:nth-child(3) { animation-delay: 0.2s; }
+  .bravo span:nth-child(4) { animation-delay: 0.3s; }
+  .bravo span:nth-child(5) { animation-delay: 0.4s; }
+  .bravo span:nth-child(7) { animation-delay: 0.5s; }
+  @keyframes hop { 0%, 100% { transform: translateY(0); } 40% { transform: translateY(-50px) rotate(-6deg); } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv" width="1920" height="1080"></canvas>
+
+  <!-- Accueil : choix de la chanson -->
+  <div id="start" class="screen on">
+    <h1>Les tambours chanteurs</h1>
+    <h2>Choisis une chanson</h2>
+    <div class="row">
+      <div class="btn song" data-action="song0">
+        <svg width="170" height="170" viewBox="0 0 100 100"><path d="M50 6 L62 37 L96 38 L69 59 L79 93 L50 73 L21 93 L31 59 L4 38 L38 37 Z" fill="#ffe14d" stroke="#fff" stroke-width="4" stroke-linejoin="round"/><circle cx="42" cy="52" r="4" fill="#2b2340"/><circle cx="58" cy="52" r="4" fill="#2b2340"/><path d="M42 63 Q50 70 58 63" stroke="#2b2340" stroke-width="4" fill="none" stroke-linecap="round"/></svg>
+        Etoile
+      </div>
+      <div class="btn song s1" data-action="song1">
+        <svg width="170" height="170" viewBox="0 0 100 100"><path d="M62 8 A42 42 0 1 0 92 70 A34 34 0 1 1 62 8 Z" fill="#fff6c2" stroke="#fff" stroke-width="3"/><circle cx="40" cy="48" r="4" fill="#2b2340"/><path d="M34 62 Q42 68 50 62" stroke="#2b2340" stroke-width="4" fill="none" stroke-linecap="round"/></svg>
+        Lune
+      </div>
+      <div class="btn song s2" data-action="song2">
+        <svg width="170" height="170" viewBox="0 0 100 100"><path d="M50 10 Q24 10 22 46 L18 72 L82 72 L78 46 Q76 10 50 10 Z" fill="#ffe14d" stroke="#fff" stroke-width="4" stroke-linejoin="round"/><rect x="12" y="70" width="76" height="10" rx="5" fill="#fff"/><circle cx="50" cy="88" r="9" fill="#fff"/><circle cx="42" cy="42" r="4" fill="#2b2340"/><circle cx="58" cy="42" r="4" fill="#2b2340"/><path d="M42 54 Q50 61 58 54" stroke="#2b2340" stroke-width="4" fill="none" stroke-linecap="round"/></svg>
+        Cloche
+      </div>
+    </div>
+  </div>
+
+  <!-- Victoire : REJOUER (meme chanson) et la maison (choix des chansons) -->
+  <div id="win" class="screen">
+    <h1 class="bravo"><span>B</span><span>R</span><span>A</span><span>V</span><span>O</span> <span>!</span></h1>
+    <div class="row">
+      <div class="btn green" data-action="again">
+        <svg width="110" height="110" viewBox="0 0 100 100"><path d="M50 16 A34 34 0 1 1 16 50" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round"/><path d="M0 54 L32 54 L16 28 Z" fill="#fff"/></svg>
+        REJOUER
+      </div>
+      <div class="btn blue" data-action="home">
+        <svg width="120" height="120" viewBox="0 0 100 100"><path d="M50 10 L94 50 L80 50 L80 90 L60 90 L60 66 L40 66 L40 90 L20 90 L20 50 L6 50 Z" fill="#fff"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <div id="home" class="corner">
+    <svg width="80" height="80" viewBox="0 0 100 100"><path d="M50 10 L94 50 L80 50 L80 90 L60 90 L60 66 L40 66 L40 90 L20 90 L20 50 L6 50 Z" fill="#fff"/></svg>
+  </div>
+  <div id="mute" class="corner">
+    <svg class="on" width="84" height="84" viewBox="0 0 100 100"><path d="M8 36 L28 36 L52 14 L52 86 L28 64 L8 64 Z" fill="#fff"/><path d="M64 34 Q74 50 64 66 M74 22 Q92 50 74 78" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round"/></svg>
+    <svg class="off" width="84" height="84" viewBox="0 0 100 100"><path d="M8 36 L28 36 L52 14 L52 86 L28 64 L8 64 Z" fill="#fff"/><path d="M64 36 L92 64 M92 36 L64 64" stroke="#fff" stroke-width="10" stroke-linecap="round"/></svg>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ================================================================
+     Constantes du jeu
+     ================================================================ */
+  var W = 1920, H = 1080;
+  var STEP = 1 / 60;
+  var LANES = 4;
+  var LANE_X = [495, 805, 1115, 1425];      // centre des 4 tambours
+  var PAD_Y = 880;                          // centre du tambour
+  var HIT_Y = PAD_Y - 135;                  // la bulle se pose ici (sur le tambour)
+  var TOP_Y = 250;                          // la bulle apparait ici
+  var TRAVEL = 2.4;                         // secondes de chute d'une bulle
+  var EARLY = 0.75;                         // un appui jusqu'a 0,75 s en avance compte
+  var PERFECT = 0.22;                       // "Super !" si l'appui est a moins de 0,22 s
+  var HELP_AFTER = 1.0;                     // l'aide "OK" apparait apres 1 s d'attente
+  var BAR_X0 = 360, BAR_X1 = 1520, BAR_Y = 76, BAR_H = 48;
+
+  var LANE_COL = ['#ff5a6a', '#ffd93b', '#3ccf6e', '#4aa8ff'];
+  var LANE_DARK = ['#b8323f', '#c9a400', '#23894a', '#2a6cb0'];
+  var LANE_LIGHT = ['#ff9aa5', '#fff0a0', '#8dffb0', '#a8d8ff'];
+  var CONF_COLS = ['#ffd93b', '#ff7eb6', '#5ee0ff', '#8dff6a', '#ffa94d', '#b18cff', '#ffffff'];
+
+  /* ================================================================
+     Chansons : [note MIDI, duree en temps, ...]  (C4 = 60)
+     ================================================================ */
+  function rep(a, n) { var r = []; for (var i = 0; i < n; i++) r = r.concat(a); return r; }
+  var TW1 = [60, 1, 60, 1, 67, 1, 67, 1, 69, 1, 69, 1, 67, 2, 65, 1, 65, 1, 64, 1, 64, 1, 62, 1, 62, 1, 60, 2];
+  var TW2 = [67, 1, 67, 1, 65, 1, 65, 1, 64, 1, 64, 1, 62, 2];
+  var LU1 = [60, 1, 60, 1, 60, 1, 62, 1, 64, 2, 62, 2, 60, 1, 64, 1, 62, 1, 62, 1, 60, 2];
+  var LU2 = [62, 1, 62, 1, 62, 1, 62, 1, 57, 2, 57, 2, 62, 1, 60, 1, 59, 1, 57, 1, 55, 2];
+  var FJ = [].concat(rep([60, 1, 62, 1, 64, 1, 60, 1], 2), rep([64, 1, 65, 1, 67, 2], 2),
+                     rep([67, 0.5, 69, 0.5, 67, 0.5, 65, 0.5, 64, 1, 60, 1], 2), rep([60, 1, 55, 1, 60, 2], 2));
+  var SONG_DEFS = [
+    { beat: 0.5, data: [].concat(TW1, TW2, TW2, TW1) },      // Ah ! vous dirai-je, maman
+    { beat: 0.5, data: [].concat(LU1, LU1, LU2, LU1) },      // Au clair de la lune
+    { beat: 0.6, data: FJ }                                  // Frere Jacques
+  ];
+
+  // Pre-calcul (une seule fois) : heure, frequence et tambour de chaque note
+  var SONGS = [];
+  (function prepare() {
+    for (var s = 0; s < SONG_DEFS.length; s++) {
+      var d = SONG_DEFS[s].data, n = d.length / 2, beat = SONG_DEFS[s].beat;
+      var song = { n: n, t: new Float32Array(n), freq: new Float32Array(n), lane: new Uint8Array(n), bass: new Uint8Array(n) };
+      var distinct = [], i, b = 0;
+      for (i = 0; i < n; i++) if (distinct.indexOf(d[2 * i]) < 0) distinct.push(d[2 * i]);
+      distinct.sort(function (x, y) { return x - y; });
+      for (i = 0; i < n; i++) {
+        var m = d[2 * i];
+        song.t[i] = TRAVEL + 0.4 + b * beat;              // la premiere bulle a le temps de tomber
+        song.freq[i] = 440 * Math.pow(2, (m - 69) / 12);
+        song.lane[i] = Math.floor(distinct.indexOf(m) * LANES / distinct.length);   // grave a gauche, aigu a droite
+        song.bass[i] = (Math.abs(b - Math.round(b / 2) * 2) < 0.01) ? 1 : 0;        // une basse tous les 2 temps
+        b += d[2 * i + 1];
+      }
+      SONGS.push(song);
+    }
+  })();
+
+  /* ================================================================
+     Outils
+     ================================================================ */
+  function $(id) { return document.getElementById(id); }
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function randInt(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+  function now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
+  function makeCanvas(w, h) { var c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+
+  /* ================================================================
+     Mise a l'echelle
+     ================================================================ */
+  var stage = $('stage'), cv = $('cv');
+  var ctx = cv.getContext('2d', { alpha: false });
+  var scale = 1, offX = 0, offY = 0;
+  function fit() {
+    var iw = window.innerWidth || W, ih = window.innerHeight || H;
+    scale = Math.min(iw / W, ih / H);
+    offX = (iw - W * scale) / 2;
+    offY = (ih - H * scale) / 2;
+    stage.style.transform = 'translate(' + offX + 'px,' + offY + 'px) scale(' + scale + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+
+  /* ================================================================
+     Son (WebAudio)
+     ================================================================ */
+  var AC = null, master = null, noiseBuf = null, muted = false;
+  try { muted = window.localStorage.getItem('tambours-muet') === '1'; } catch (e) { /* rien */ }
+
+  function initAudio() {
+    if (AC) {
+      if (AC.state === 'suspended' && !document.hidden) { try { AC.resume(); } catch (e) { /* rien */ } }
+      return;
+    }
+    try {
+      var C = window.AudioContext || window.webkitAudioContext;
+      if (!C) return;
+      AC = new C();
+      master = AC.createGain();
+      master.gain.value = muted ? 0 : 0.5;
+      master.connect(AC.destination);
+      // 1 s de bruit blanc pour les applaudissements (cree une seule fois)
+      noiseBuf = AC.createBuffer(1, AC.sampleRate, AC.sampleRate);
+      var data = noiseBuf.getChannelData(0);
+      for (var i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    } catch (e) { AC = null; }
+  }
+  function tone(freq, dur, type, vol, delay, slideTo) {
+    if (!AC || muted || AC.state !== 'running') return;
+    try {
+      var t = AC.currentTime + (delay || 0);
+      var o = AC.createOscillator(), g = AC.createGain();
+      o.type = type || 'sine';
+      o.frequency.setValueAtTime(freq, t);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol || 0.2, t + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(master);
+      o.start(t); o.stop(t + dur + 0.05);
+    } catch (e) { /* rien */ }
+  }
+  // Un "clap" : bruit filtre tres court
+  function clap(delay, vol) {
+    if (!AC || muted || !noiseBuf || AC.state !== 'running') return;
+    try {
+      var t = AC.currentTime + delay;
+      var src = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
+      src.buffer = noiseBuf;
+      f.type = 'bandpass'; f.frequency.value = 1000 + Math.random() * 1400; f.Q.value = 0.9;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+      src.connect(f); f.connect(g); g.connect(master);
+      src.start(t, Math.random() * 0.8, 0.12);
+    } catch (e) { /* rien */ }
+  }
+  // La note jouee par l'enfant : timbre de boite a musique + petite basse
+  function sfxNote(freq, withBass, perfect) {
+    tone(freq, 0.5, 'triangle', 0.32);
+    tone(freq * 2, 0.25, 'sine', perfect ? 0.1 : 0.06, 0.005);
+    if (withBass) tone(freq / 2, 0.45, 'sine', 0.2);
+    tone(160, 0.12, 'sine', 0.22, 0, 60);          // le "boum" du tambour
+  }
+  function sfxPlic() { tone(1500, 0.05, 'sine', 0.06); }
+  function sfxSelect() { tone(880, 0.06, 'sine', 0.12); }
+  function sfxConfirm() { tone(660, 0.1, 'triangle', 0.25); tone(990, 0.18, 'triangle', 0.25, 0.09); }
+  function sfxApplause() {
+    for (var i = 0; i < 90; i++) {
+      var d = Math.random() * 2.8;
+      clap(d, (0.05 + Math.random() * 0.1) * (d < 2 ? 1 : (2.8 - d) / 0.8 + 0.05));
+    }
+    var seq = [523.25, 659.25, 783.99, 1046.5];
+    for (var j = 0; j < seq.length; j++) tone(seq[j], 0.9, 'triangle', 0.16, 0.05 + j * 0.08);
+  }
+
+  var muteBtn = $('mute');
+  function paintMute() { muteBtn.classList.toggle('muted', muted); }
+  function toggleMute() {
+    muted = !muted;
+    if (master) master.gain.value = muted ? 0 : 0.5;
+    try { window.localStorage.setItem('tambours-muet', muted ? '1' : '0'); } catch (e) { /* rien */ }
+    paintMute();
+    if (!muted) sfxSelect();
+  }
+  paintMute();
+
+  /* ================================================================
+     Images pre-rendues : decor, tambours, bulles, barre arc-en-ciel
+     ================================================================ */
+  var bgImg = makeCanvas(W, H);
+  (function drawBg() {
+    var g = bgImg.getContext('2d'), i;
+    var grd = g.createLinearGradient(0, 0, 0, H);
+    grd.addColorStop(0, '#1a0f45'); grd.addColorStop(0.7, '#3a1d6e'); grd.addColorStop(1, '#2a1250');
+    g.fillStyle = grd; g.fillRect(0, 0, W, H);
+    // petites lumieres
+    for (i = 0; i < 70; i++) {
+      g.fillStyle = 'rgba(255,255,255,' + (0.15 + Math.random() * 0.4) + ')';
+      g.beginPath(); g.arc(Math.random() * W, Math.random() * 600, 2 + Math.random() * 3, 0, Math.PI * 2); g.fill();
+    }
+    // rideaux rouges
+    for (var side = 0; side < 2; side++) {
+      for (i = 0; i < 4; i++) {
+        var x = side === 0 ? i * 60 : W - (i + 1) * 60;
+        var cg = g.createLinearGradient(x, 0, x + 60, 0);
+        cg.addColorStop(0, '#9b1c3a'); cg.addColorStop(0.5, '#d8355a'); cg.addColorStop(1, '#9b1c3a');
+        g.fillStyle = cg; g.fillRect(x, 0, 60, H);
+      }
+    }
+    g.fillStyle = '#b8243f'; g.fillRect(0, 0, W, 40);
+    // scene (plancher)
+    var fg = g.createLinearGradient(0, 940, 0, H);
+    fg.addColorStop(0, '#8a4b2a'); fg.addColorStop(1, '#5a2e18');
+    g.fillStyle = fg; g.fillRect(0, 960, W, H - 960);
+    // couloirs des bulles
+    for (i = 0; i < LANES; i++) {
+      g.fillStyle = 'rgba(255,255,255,0.06)';
+      g.beginPath(); roundRectPath(g, LANE_X[i] - 80, TOP_Y - 80, 160, HIT_Y - TOP_Y + 80, 80); g.fill();
+      g.strokeStyle = LANE_COL[i]; g.globalAlpha = 0.5; g.lineWidth = 8;
+      g.beginPath(); g.arc(LANE_X[i], HIT_Y, 70, 0, Math.PI * 2); g.stroke();
+      g.globalAlpha = 1;
+    }
+    // fond de la barre de progression + l'etoile but
+    g.fillStyle = 'rgba(255,255,255,0.16)';
+    g.beginPath(); roundRectPath(g, BAR_X0 - 8, BAR_Y - 8, BAR_X1 - BAR_X0 + 16, BAR_H + 16, (BAR_H + 16) / 2); g.fill();
+  })();
+  function roundRectPath(g, x, y, w, h, r) {
+    g.moveTo(x + r, y); g.lineTo(x + w - r, y); g.arc(x + w - r, y + r, r, -Math.PI / 2, 0);
+    g.lineTo(x + w, y + h - r); g.arc(x + w - r, y + h - r, r, 0, Math.PI / 2);
+    g.lineTo(x + r, y + h); g.arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
+    g.lineTo(x, y + r); g.arc(x + r, y + r, r, Math.PI, Math.PI * 1.5);
+    g.closePath();
+  }
+
+  var rainbowImg = makeCanvas(BAR_X1 - BAR_X0, BAR_H);
+  (function drawRainbow() {
+    var g = rainbowImg.getContext('2d');
+    var grd = g.createLinearGradient(0, 0, rainbowImg.width, 0);
+    grd.addColorStop(0, '#ff5a6a'); grd.addColorStop(0.25, '#ffa94d'); grd.addColorStop(0.5, '#ffd93b');
+    grd.addColorStop(0.75, '#3ccf6e'); grd.addColorStop(1, '#4aa8ff');
+    g.fillStyle = grd; g.fillRect(0, 0, rainbowImg.width, BAR_H);
+    g.fillStyle = 'rgba(255,255,255,0.35)'; g.fillRect(0, 6, rainbowImg.width, 10);
+  })();
+
+  // Tambour : cylindre colore (le visage est dessine a part, il bouge)
+  var PAD_SPR = 320, padImgs = [];
+  for (var l0 = 0; l0 < LANES; l0++) {
+    var pc = makeCanvas(PAD_SPR, PAD_SPR), g = pc.getContext('2d'), cx = PAD_SPR / 2, cy = PAD_SPR / 2;
+    g.fillStyle = 'rgba(0,0,0,0.3)';
+    g.beginPath(); g.ellipse(cx, cy + 100, 140, 34, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = LANE_DARK[l0];
+    g.beginPath(); g.ellipse(cx, cy + 80, 130, 42, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = LANE_COL[l0];
+    g.fillRect(cx - 130, cy - 60, 260, 140);
+    g.strokeStyle = '#fff'; g.lineWidth = 6; g.globalAlpha = 0.5;
+    for (var z = 0; z < 6; z++) { g.beginPath(); g.moveTo(cx - 130 + z * 52, cy - 50); g.lineTo(cx - 104 + z * 52, cy + 70); g.stroke(); }
+    g.globalAlpha = 1;
+    g.fillStyle = '#fff8e7';
+    g.beginPath(); g.ellipse(cx, cy - 60, 130, 42, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = LANE_DARK[l0]; g.lineWidth = 10;
+    g.beginPath(); g.ellipse(cx, cy - 60, 130, 42, 0, 0, Math.PI * 2); g.stroke();
+    padImgs.push(pc);
+  }
+
+  // Bulle musicale : rond colore + une croche blanche + reflet
+  var BUB_SPR = 150, bubImgs = [];
+  for (var l1 = 0; l1 < LANES; l1++) {
+    var bc = makeCanvas(BUB_SPR, BUB_SPR), b = bc.getContext('2d'), c = BUB_SPR / 2;
+    b.fillStyle = LANE_COL[l1];
+    b.beginPath(); b.arc(c, c, 62, 0, Math.PI * 2); b.fill();
+    b.strokeStyle = '#fff'; b.lineWidth = 7;
+    b.beginPath(); b.arc(c, c, 62, 0, Math.PI * 2); b.stroke();
+    b.fillStyle = '#fff';
+    b.beginPath(); b.ellipse(c - 12, c + 22, 17, 13, -0.4, 0, Math.PI * 2); b.fill();
+    b.fillRect(c + 1, c - 36, 8, 60);
+    b.beginPath(); b.moveTo(c + 9, c - 36); b.quadraticCurveTo(c + 34, c - 26, c + 26, c - 2); b.quadraticCurveTo(c + 24, c - 18, c + 9, c - 20); b.fill();
+    b.fillStyle = 'rgba(255,255,255,0.45)';
+    b.beginPath(); b.ellipse(c - 28, c - 30, 14, 9, -0.7, 0, Math.PI * 2); b.fill();
+    bubImgs.push(bc);
+  }
+
+  /* ================================================================
+     Pools (aucune allocation pendant le jeu)
+     ================================================================ */
+  var BMAX = 16, bubbles = [];
+  for (var i0 = 0; i0 < BMAX; i0++) bubbles.push({ on: false, idx: 0, lane: 0 });
+
+  var PMAX = 400, parts = [], pNext = 0;
+  for (var i1 = 0; i1 < PMAX; i1++) parts.push({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, col: '#fff', size: 10, kind: 0, rot: 0, vr: 0, g: 0 });
+  function emit(x, y, vx, vy, life, col, size, kind, grav) {
+    var p = parts[pNext]; pNext = (pNext + 1) % PMAX;
+    p.on = true; p.x = x; p.y = y; p.vx = vx; p.vy = vy; p.life = life; p.max = life;
+    p.col = col; p.size = size; p.kind = kind; p.g = grav;
+    p.rot = Math.random() * 6.28; p.vr = (Math.random() - 0.5) * 10;
+  }
+  function burst(x, y, n, col) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2, sp = 200 + Math.random() * 450;
+      emit(x, y, Math.cos(a) * sp, Math.sin(a) * sp - 200, 0.5 + Math.random() * 0.4,
+        (col && (i & 1)) ? col : CONF_COLS[i % CONF_COLS.length], 8 + Math.random() * 12, 0, 900);
+    }
+  }
+  function confetti(n) {
+    for (var i = 0; i < n; i++) {
+      emit(Math.random() * W, -20 - Math.random() * 200, (Math.random() - 0.5) * 200, 150 + Math.random() * 250,
+        4 + Math.random() * 2, CONF_COLS[randInt(0, CONF_COLS.length - 1)], 16 + Math.random() * 14, 1, 120);
+    }
+  }
+
+  // Mots qui s'envolent : 0 = "Super !", 1 = "Oui !"
+  var WORDS = ['Super !', 'Oui !'];
+  var TMAX = 4, texts = [], tNext = 0;
+  for (var i2 = 0; i2 < TMAX; i2++) texts.push({ on: false, t: 0, x: 0, y: 0, w: 0 });
+  function popWord(x, y, w) {
+    var t = texts[tNext]; tNext = (tNext + 1) % TMAX;
+    t.on = true; t.t = 0; t.x = x; t.y = y; t.w = w;
+  }
+
+  /* ================================================================
+     Etat du jeu
+     ================================================================ */
+  var state = 'start';          // 'start' | 'play' | 'celebrate' | 'win'
+  var song = SONGS[0], songIdx = 0;
+  var songT = 0;                // horloge de la chanson (s'arrete quand une bulle attend)
+  var nextIdx = 0;              // premiere note pas encore jouee
+  var spawnIdx = 0;             // prochaine bulle a faire apparaitre
+  var waiting = false, waitT = 0;
+  var T = 0, celebT = 0, confT = 0, starPop = 0;
+  var sing = new Float32Array(LANES);     // le tambour chante (bouche ouverte), 1 -> 0
+  var flash = new Float32Array(LANES);    // lueur du couloir
+  var nudge = new Float32Array(LANES);    // petite secousse (appui trop tot)
+  var blink = new Float32Array(LANES);
+  var actLock = 0, lastOkKey = 0;
+
+  function resetSong() {
+    var i;
+    for (i = 0; i < BMAX; i++) bubbles[i].on = false;
+    for (i = 0; i < LANES; i++) { sing[i] = 0; flash[i] = 0; nudge[i] = 0; blink[i] = 1 + Math.random() * 3; }
+    songT = 0; nextIdx = 0; spawnIdx = 0; waiting = false; waitT = 0; starPop = 0;
+  }
+  function startSong(i) {
+    songIdx = i; song = SONGS[i];
+    resetSong();
+    state = 'play';
+    showScreen(null);
+  }
+  function goHome() {
+    resetSong();
+    state = 'start';
+    showScreen('start');
+    bsel = songIdx;
+    paintBtnSel();
+    actLock = now() + 400;
+  }
+  function showWin() {
+    state = 'win';
+    showScreen('win');
+    actLock = now() + 900;
+  }
+
+  // L'enfant tape (OK ou clic)
+  function tap() {
+    if (state !== 'play' || nextIdx >= song.n) return;
+    var d = song.t[nextIdx] - songT;
+    if (d > EARLY) {                       // bien trop tot : rien de grave, petit "plic"
+      sfxPlic();
+      nudge[song.lane[nextIdx]] = 1;
+      return;
+    }
+    // "Super !" : juste a temps (un peu avant l'arrivee, ou tout de suite apres)
+    var perfect = waiting ? waitT < PERFECT : d < PERFECT;
+    var i = nextIdx, lane = song.lane[i];
+    sfxNote(song.freq[i], song.bass[i] === 1, perfect);
+    sing[lane] = 1; flash[lane] = 1;
+    // la bulle eclate la ou elle est
+    var y = bubbleY(i);
+    for (var k = 0; k < BMAX; k++) if (bubbles[k].on && bubbles[k].idx === i) bubbles[k].on = false;
+    burst(LANE_X[lane], y, perfect ? 26 : 14, LANE_COL[lane]);
+    if (perfect || i % 4 === 0) popWord(LANE_X[lane], y - 90, perfect ? 0 : 1);
+    nextIdx++;
+    waiting = false; waitT = 0;
+    if (nextIdx >= song.n) {
+      state = 'celebrate'; celebT = 3.4;
+      sfxApplause(); confetti(120); starPop = 1;
+    }
+  }
+
+  function bubbleY(idx) {
+    var k = (song.t[idx] - songT) / TRAVEL;        // 1 = en haut, 0 = sur le tambour
+    if (k < 0) k = 0;
+    return HIT_Y - k * (HIT_Y - TOP_Y);
+  }
+
+  /* ================================================================
+     Mise a jour (pas fixe)
+     ================================================================ */
+  function update(dt) {
+    T += dt;
+    var i;
+    if (state === 'play') {
+      // L'horloge avance, sauf si la prochaine note est arrivee sur son tambour : on l'attend
+      if (!waiting) {
+        songT += dt;
+        if (nextIdx < song.n && songT >= song.t[nextIdx]) { songT = song.t[nextIdx]; waiting = true; waitT = 0; }
+      } else {
+        waitT += dt;
+      }
+      // nouvelles bulles
+      while (spawnIdx < song.n && song.t[spawnIdx] - TRAVEL <= songT) {
+        for (i = 0; i < BMAX; i++) {
+          if (!bubbles[i].on) { bubbles[i].on = true; bubbles[i].idx = spawnIdx; bubbles[i].lane = song.lane[spawnIdx]; break; }
+        }
+        spawnIdx++;
+      }
+    }
+    if (state === 'celebrate') {
+      celebT -= dt;
+      // les tambours chantent a tour de role
+      var l = Math.floor(T * 6) % LANES;
+      if (sing[l] < 0.3) sing[l] = 1;
+      if (celebT <= 0) { showWin(); confT = 0; }
+    }
+    if (state === 'win') {
+      confT -= dt;
+      if (confT <= 0) { confetti(25); confT = 1.2; }
+    }
+    for (i = 0; i < LANES; i++) {
+      sing[i] = Math.max(0, sing[i] - dt * 2.2);
+      flash[i] = Math.max(0, flash[i] - dt * 2.5);
+      nudge[i] = Math.max(0, nudge[i] - dt * 3);
+      blink[i] -= dt;
+      if (blink[i] < -0.12) blink[i] = 2 + Math.random() * 3;
+    }
+    if (starPop > 0) starPop = Math.max(0, starPop - dt * 0.6);
+    for (i = 0; i < TMAX; i++) { var t = texts[i]; if (t.on) { t.t += dt; if (t.t > 1) t.on = false; } }
+    for (i = 0; i < PMAX; i++) {
+      var p = parts[i];
+      if (!p.on) continue;
+      p.life -= dt;
+      if (p.life <= 0) { p.on = false; continue; }
+      p.vy += p.g * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+      if (p.kind === 1) p.x += Math.sin(T * 3 + p.rot) * 40 * dt;
+    }
+  }
+
+  /* ================================================================
+     Rendu
+     ================================================================ */
+  var INK = '#2b2340';
+  function drawStar(x, y, r, rot) {
+    ctx.beginPath();
+    for (var i = 0; i < 10; i++) {
+      var a = rot + i * Math.PI / 5 - Math.PI / 2, rr = (i & 1) ? r * 0.45 : r;
+      if (i === 0) ctx.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+      else ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Un tambour avec son visage : yeux (clignent, ou fermes et heureux quand il chante) et bouche
+  function drawPad(l) {
+    var s = sing[l];
+    var x = LANE_X[l] + Math.sin(nudge[l] * 20) * nudge[l] * 14;
+    var y = PAD_Y + (state === 'start' ? 0 : Math.sin(T * 3 + l) * 4);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(1 + s * 0.08, 1 - s * 0.08);
+    ctx.drawImage(padImgs[l], -PAD_SPR / 2, -PAD_SPR / 2);
+    ctx.strokeStyle = INK; ctx.fillStyle = INK; ctx.lineWidth = 7; ctx.lineCap = 'round';
+    if (s > 0.15) {                                   // yeux fermes, contents : ^ ^
+      ctx.beginPath(); ctx.arc(-38, 10, 14, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+      ctx.beginPath(); ctx.arc(38, 10, 14, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+    } else if (blink[l] < 0) {                        // clignement
+      ctx.beginPath(); ctx.moveTo(-50, 4); ctx.lineTo(-26, 4); ctx.moveTo(26, 4); ctx.lineTo(50, 4); ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.arc(-38, 4, 12, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(38, 4, 12, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(-34, 0, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(42, 0, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = INK;
+    }
+    if (s > 0.05) {                                   // bouche ronde qui chante
+      ctx.beginPath(); ctx.ellipse(0, 40, 18 + s * 6, 6 + s * 22, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ff7eb6';
+      ctx.beginPath(); ctx.ellipse(0, 46 + s * 8, 10, 4 + s * 6, 0, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(0, 30, 18, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function render() {
+    var i;
+    ctx.drawImage(bgImg, 0, 0);
+
+    // lueur des couloirs quand un tambour joue
+    for (i = 0; i < LANES; i++) {
+      if (flash[i] <= 0) continue;
+      ctx.globalAlpha = flash[i] * 0.45;
+      ctx.fillStyle = LANE_LIGHT[i];
+      ctx.fillRect(LANE_X[i] - 80, 0, 160, HIT_Y);
+    }
+    ctx.globalAlpha = 1;
+
+    // barre de progression arc-en-ciel et etoile but
+    var prog = song.n ? nextIdx / song.n : 0;
+    var pw = Math.round((BAR_X1 - BAR_X0) * prog);
+    if (state !== 'start' && pw > 0) ctx.drawImage(rainbowImg, 0, 0, pw, BAR_H, BAR_X0, BAR_Y, pw, BAR_H);
+    var sr = 52 + starPop * 40 + Math.sin(T * 4) * 4;
+    ctx.fillStyle = '#ffe14d';
+    drawStar(BAR_X1 + 90, BAR_Y + BAR_H / 2, sr, starPop * 6);
+
+    // tambours d'abord : la bulle qui attend se pose par-dessus
+    for (i = 0; i < LANES; i++) drawPad(i);
+
+    // bulles
+    if (state === 'play' || state === 'celebrate') {
+      for (i = 0; i < BMAX; i++) {
+        var b = bubbles[i];
+        if (!b.on) continue;
+        var y = bubbleY(b.idx), sc = 1;
+        if (waiting && b.idx === nextIdx) {             // la bulle attend : elle respire
+          sc = 1 + Math.sin(T * 8) * 0.08;
+          y += Math.sin(T * 8) * 6;
+        }
+        var sz = BUB_SPR * sc;
+        ctx.drawImage(bubImgs[b.lane], LANE_X[b.lane] - sz / 2, y - sz / 2, sz, sz);
+      }
+    }
+
+    // aide : "OK" qui clignote a cote de la bulle qui attend (cote exterieur de l'ecran)
+    if (state === 'play' && waiting && (nextIdx === 0 || waitT > HELP_AFTER)) {   // tout de suite pour la 1re note
+      var hl = song.lane[nextIdx], hx = LANE_X[hl] + (hl < 2 ? -170 : 170), hy = HIT_Y - 10;
+      var pulse = 1 + Math.sin(T * 7) * 0.1;
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 10; ctx.globalAlpha = 0.6 + Math.sin(T * 7) * 0.3;
+      ctx.beginPath(); ctx.arc(LANE_X[hl], HIT_Y, 90 * pulse, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#3ccf6e';
+      ctx.beginPath(); ctx.arc(hx, hy, 66 * pulse, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = 8; ctx.beginPath(); ctx.arc(hx, hy, 66 * pulse, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 60px "Trebuchet MS", Verdana, Arial, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('OK', hx, hy + 3);
+    }
+
+    // mots qui s'envolent
+    ctx.font = 'bold 76px "Trebuchet MS", Verdana, Arial, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (i = 0; i < TMAX; i++) {
+      var t = texts[i];
+      if (!t.on) continue;
+      ctx.globalAlpha = 1 - t.t;
+      ctx.fillStyle = '#7a2a8a'; ctx.fillText(WORDS[t.w], t.x, t.y - t.t * 120 + 6);
+      ctx.fillStyle = t.w === 0 ? '#ffe14d' : '#fff'; ctx.fillText(WORDS[t.w], t.x, t.y - t.t * 120);
+    }
+    ctx.globalAlpha = 1;
+
+    // particules
+    for (i = 0; i < PMAX; i++) {
+      var p = parts[i];
+      if (!p.on) continue;
+      ctx.globalAlpha = clamp(p.life / p.max * 1.5, 0, 1);
+      ctx.fillStyle = p.col;
+      if (p.kind === 1) {
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+        ctx.restore();
+      } else {
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* ================================================================
+     Ecrans et selection
+     ================================================================ */
+  var screens = { start: $('start'), win: $('win') };
+  var homeCorner = $('home');
+  var curButtons = [], bsel = 0;
+  function showScreen(name) {
+    for (var k in screens) if (screens.hasOwnProperty(k)) screens[k].classList.toggle('on', k === name);
+    curButtons = name ? Array.prototype.slice.call(screens[name].querySelectorAll('.btn')) : [];
+    bsel = 0;
+    paintBtnSel();
+    homeCorner.classList.toggle('on', !name);
+  }
+  function paintBtnSel() { for (var i = 0; i < curButtons.length; i++) curButtons[i].classList.toggle('sel', i === bsel); }
+  function moveBtnSel(d) {
+    if (!curButtons.length) return;
+    var n = clamp(bsel + d, 0, curButtons.length - 1);
+    if (n !== bsel) { bsel = n; paintBtnSel(); sfxSelect(); }
+  }
+  function activate(action) {
+    var t = now();
+    if (t < actLock) return;
+    actLock = t + 500;
+    sfxConfirm();
+    if (action === 'song0') startSong(0);
+    else if (action === 'song1') startSong(1);
+    else if (action === 'song2') startSong(2);
+    else if (action === 'again') startSong(songIdx);
+    else if (action === 'home') goHome();
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.btn'), function (el) {
+    el.addEventListener('mouseenter', function () {
+      var idx = curButtons.indexOf(el);
+      if (idx >= 0 && idx !== bsel) { bsel = idx; paintBtnSel(); }
+    });
+    el.addEventListener('click', function (e) {
+      e.stopPropagation(); initAudio();
+      if (now() - lastOkKey < 300) return;
+      activate(el.getAttribute('data-action'));
+    });
+  });
+  homeCorner.addEventListener('click', function (e) { e.stopPropagation(); if (state !== 'start') activate('home'); });
+  muteBtn.addEventListener('click', function (e) { e.stopPropagation(); initAudio(); toggleMute(); });
+  // Mode pointeur : un clic n'importe ou pendant la chanson = taper
+  stage.addEventListener('click', function () {
+    initAudio();
+    if (now() - lastOkKey < 300) return;
+    tap();
+  });
+
+  /* ================================================================
+     Clavier / telecommande
+     ================================================================ */
+  function keyOf(e) {
+    var k = e.key, c = e.keyCode;
+    if (k === 'ArrowLeft' || k === 'Left' || c === 37) return 'left';
+    if (k === 'ArrowRight' || k === 'Right' || c === 39) return 'right';
+    if (k === 'ArrowUp' || k === 'Up' || c === 38) return 'up';
+    if (k === 'ArrowDown' || k === 'Down' || c === 40) return 'down';
+    if (k === 'Enter' || k === ' ' || k === 'Spacebar' || k === 'Select' || c === 13 || c === 32) return 'ok';
+    if (k === 'Escape' || k === 'Backspace' || k === 'GoBack' || k === 'BrowserBack' ||
+        c === 27 || c === 8 || c === 461 || c === 10009) return 'back';
+    if (k === 'm' || k === 'M' || k === 'ColorF0Red' || c === 403) return 'mute';
+    return null;
+  }
+  window.addEventListener('keydown', function (e) {
+    initAudio();
+    var k = keyOf(e);
+    if (!k) return;
+    if (k === 'back' && state === 'start') return;   // sur l'accueil, "retour" est laisse a la tele
+    e.preventDefault();
+    if (k === 'mute') { if (!e.repeat) toggleMute(); return; }
+    if (k === 'ok') lastOkKey = now();
+    if (state === 'play') {
+      if (k === 'ok') { if (!e.repeat) tap(); }     // les fleches ne jouent pas : elles peuvent bouger le pointeur
+      else if (k === 'back') activate('home');
+      return;
+    }
+    if (state === 'celebrate') { if (k === 'back') activate('home'); return; }
+    if (k === 'left' || k === 'up') { if (!e.repeat) moveBtnSel(-1); }
+    else if (k === 'right' || k === 'down') { if (!e.repeat) moveBtnSel(1); }
+    else if (k === 'ok') { if (!e.repeat && curButtons[bsel]) activate(curButtons[bsel].getAttribute('data-action')); }
+    else if (k === 'back') activate('home');
+  });
+
+  window.addEventListener('mousedown', function (e) { initAudio(); e.preventDefault(); });
+  window.addEventListener('touchstart', function () { initAudio(); }, { passive: true });
+  window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  document.addEventListener('selectstart', function (e) { e.preventDefault(); });
+  window.addEventListener('wheel', function (e) { e.preventDefault(); }, { passive: false });
+
+  /* ================================================================
+     Boucle : pas fixe 1/60 s, pause quand l'onglet est cache
+     ================================================================ */
+  var acc = 0, last = 0, running = !document.hidden, resetClock = true;
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      running = false;
+      if (AC && AC.state === 'running') { try { AC.suspend(); } catch (e) { /* rien */ } }
+    } else {
+      running = true;
+      resetClock = true;
+      if (AC && AC.state === 'suspended') { try { AC.resume(); } catch (e) { /* rien */ } }
+    }
+  });
+  function frame(ts) {
+    requestAnimationFrame(frame);
+    if (!running) return;
+    if (resetClock) { last = ts; acc = 0; resetClock = false; }
+    var dt = (ts - last) / 1000;
+    last = ts;
+    if (dt < 0) dt = 0;
+    if (dt > 0.25) dt = 0.25;
+    acc += dt;
+    var n = 0;
+    while (acc >= STEP && n < 8) { update(STEP); acc -= STEP; n++; }
+    if (n === 8) acc = 0;
+    render();
+  }
+
+  showScreen('start');
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
