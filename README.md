@@ -20,31 +20,32 @@ the artwork, a WebSocket for the channel state.
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    subgraph TV["TV screen — Chromium 111, full screen"]
+        L["launcher/index.html<br/>channel grid · settings · offline cache"]
+        G["games/*.html<br/>five single-file games"]
+        W["lab/index.html<br/>shell console"]
+    end
+
+    subgraph HOST["host/tvhost.js — Node 20 on the TV"]
+        S["static files<br/>/var/local/tvhost/www"]
+        P["settings.json<br/>last input · theme · hidden apps"]
+        K["keys/tokens.json<br/>pairing credentials"]
+    end
+
+    subgraph API["VIDAA ui_service"]
+        U["app list · source list<br/>change source · launch app · TV state"]
+    end
+
+    L -- "HTTP :8766 · WS /ws" --> S
+    G -- "HTTP :8766" --> S
+    W -- "HTTP :8766 · /api/sh" --> S
+    S --- P
+    S --- K
+    S -- "MQTT 3.1.1 over TLS · :36669" --> U
 ```
- ┌──────────────────────────────────────────────────────────────┐
- │  the TV's screen — Chromium 111, no chrome, no address bar    │
- │                                                              │
- │  launcher/index.html    home grid, Réglages, offline cache    │
- │  games/*.html           five single-file games                │
- │  lab/index.html         a shell console for the TV            │
- └───────────────┬──────────────────────────────────────────────┘
-                 │  HTTP   :8766        pages, icons, /api/*
-                 │  WS     /ws          state in, commands out
- ┌───────────────┴──────────────────────────────────────────────┐
- │  host/tvhost.js — Node 20 on the TV (writable partition)      │
- │                                                              │
- │  static files  /var/local/tvhost/www                          │
- │  settings      /var/local/tvhost/settings.json                │
- │  credentials   /var/local/tvhost/keys/tokens.json             │
- └───────────────┬──────────────────────────────────────────────┘
-                 │  MQTT 3.1.1 over TLS, port 36669
-                 │  the TV's own broker, mobile client certificate
- ┌───────────────┴──────────────────────────────────────────────┐
- │  VIDAA ui_service                                            │
- │  app list · source list · change source · launch app ·       │
- │  TV state · shell (used by the lab page)                     │
- └──────────────────────────────────────────────────────────────┘
-```
+
 
 Two channels, both on loopback:
 
