@@ -1,0 +1,2 @@
+name=vidaa-launcher
+description=A custom home screen for a Hisense VIDAA TV: a Wii-style channel grid, a settings page and five small games, served by a Node server on the TV itself.
