@@ -6,8 +6,8 @@ pages that a small Node server running on the TV itself serves over
 settings page, a lab console and five small games for children aged 4–7.
 
 No build step, no framework, no CDN: every page is a single HTML file with its
-CSS, SVG and sound inline. The only network traffic is the loopback WebSocket to
-the server that started it.
+CSS, SVG and sound inline. All traffic stays on loopback: HTTP for the pages and
+the artwork, a WebSocket for the channel state.
 
 ![Home screen, light theme](screenshots/01-home-light.png)
 
